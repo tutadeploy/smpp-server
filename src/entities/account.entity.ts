@@ -4,7 +4,10 @@ import {
   PrimaryGeneratedColumn,
   CreateDateColumn,
   UpdateDateColumn,
+  ManyToOne,
+  JoinColumn,
 } from 'typeorm';
+import { Service } from './service.entity';
 
 @Entity('accounts')
 export class Account {
@@ -19,6 +22,10 @@ export class Account {
 
   @Column({ name: 'service_id', length: 32 })
   serviceId: string;
+
+  @ManyToOne(() => Service)
+  @JoinColumn({ name: 'service_id', referencedColumnName: 'serviceId' })
+  service: Service;
 
   @Column({ type: 'decimal', precision: 10, scale: 2, default: 0 })
   balance: number;

@@ -52,3 +52,5 @@ lerna-debug.log*
 /.vscode
 /设计文档
 /测试文档
+线上问题.md
+.env.prod
