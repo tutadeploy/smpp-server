@@ -8,6 +8,7 @@ import { BalanceService } from '../services/balance.service';
 @Injectable()
 export class SmsQueueConsumer implements OnModuleInit {
   private readonly logger = new Logger(SmsQueueConsumer.name);
+  private readonly BATCH_SIZE = 100; // 每批处理的号码数量
 
   constructor(
     private readonly kafkaConsumer: KafkaConsumerService,
@@ -44,9 +45,38 @@ export class SmsQueueConsumer implements OnModuleInit {
           );
           this.logger.debug(`[扣费调试] 扣除余额完成: appId=${message.appId}`);
 
-          // 发送短信
-          await this.providerService.sendMessage(params);
-          this.logger.debug(`消息处理成功: ${JSON.stringify(params)}`);
+          // 将号码分组处理
+          const batches = [];
+          for (
+            let i = 0;
+            i < params.phoneNumbers.length;
+            i += this.BATCH_SIZE
+          ) {
+            const batch = params.phoneNumbers.slice(i, i + this.BATCH_SIZE);
+            batches.push(
+              this.providerService.sendMessage({
+                ...params,
+                phoneNumbers: batch,
+              }),
+            );
+          }
+
+          // 并发处理所有批次
+          const results = await Promise.all(batches);
+
+          // 统计结果
+          const totalSuccess = results.reduce(
+            (sum, result) => sum + result.successCount,
+            0,
+          );
+          const totalFail = results.reduce(
+            (sum, result) => sum + result.failCount,
+            0,
+          );
+
+          this.logger.debug(
+            `消息处理完成: 成功=${totalSuccess}, 失败=${totalFail}`,
+          );
         } catch (error) {
           this.logger.error(`消息处理失败: ${error.message}`, error.stack);
           // 这里可以添加重试逻辑或死信队列处理
@@ -54,7 +84,7 @@ export class SmsQueueConsumer implements OnModuleInit {
       });
     } catch (error) {
       this.logger.error(`设置消费者失败: ${error.message}`, error.stack);
-      throw error; // 重新抛出错误以便 NestJS 可以处理启动失败
+      throw error;
     }
   }
 }

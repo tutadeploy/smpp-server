@@ -24,8 +24,6 @@ export class SmsService {
 
   /**
    * 处理SMS发送请求
-   * @param data 发送请求数据
-   * @returns 处理结果
    */
   async processSendRequest(data: {
     appId: string;
@@ -36,7 +34,7 @@ export class SmsService {
     priority?: number;
     scheduleTime?: Date;
   }): Promise<any> {
-    this.logger.log('[调试] 进入 processSendRequest 方法');
+    this.logger.log(`[调试] 处理批量请求，数量: ${data.phoneNumbers.length}`);
     const {
       appId,
       phoneNumbers,
@@ -51,14 +49,13 @@ export class SmsService {
       // 1. 验证请求参数
       await this.validateSendRequest(data);
 
-      // 2. 验证账户余额
+      // 2. 检查账户余额是否足够
       const hasEnoughBalance = await this.balanceService.checkBalance(
         appId,
         phoneNumbers.length,
       );
-
       if (!hasEnoughBalance) {
-        this.logger.warn(`[API余额不足测试] 账户 ${appId} 余额不足`);
+        this.logger.warn(`[余额不足] 账户 ${appId} 余额不足，无法发送任何短信`);
         return {
           status: '1',
           reason: 'INSUFFICIENT_BALANCE',
@@ -68,7 +65,7 @@ export class SmsService {
         };
       }
 
-      // 3. 创建消息记录
+      // 3. 批量创建消息记录
       const messageId = orderId || uuidv4();
       const messages = await this.createMessageRecords({
         messageId,
@@ -104,7 +101,7 @@ export class SmsService {
 
       // 6. 返回处理结果
       this.logger.log(`短信发送成功，共${phoneNumbers.length}条`);
-      return {
+      const response = {
         status: '0',
         reason: 'message queued',
         success: String(phoneNumbers.length),
@@ -115,6 +112,8 @@ export class SmsService {
           orderId: message.orderId || '',
         })),
       };
+
+      return response;
     } catch (error) {
       this.logger.error(
         `处理SMS请求失败: ${error instanceof Error ? error.message : 'Unknown error'}`,
@@ -189,7 +188,11 @@ export class SmsService {
 
     const messages = phoneNumbers.map((phoneNumber) => {
       const message = new Message();
-      message.messageId = messageId;
+      // 使用更短的格式：原始 messageId + 电话号码后 8 位 + 时间戳后 8 位 + 随机 4 位
+      const timestamp = Date.now().toString().slice(-8);
+      const random = Math.random().toString(36).substr(2, 4);
+      const phoneSuffix = phoneNumber.slice(-8);
+      message.messageId = `${messageId}_${phoneSuffix}_${timestamp}_${random}`;
       message.appId = appId;
       message.phoneNumber = phoneNumber;
       message.content = content;
@@ -200,23 +203,8 @@ export class SmsService {
       return message;
     });
 
+    // 使用批量插入
     return await this.messageRepository.save(messages);
-  }
-
-  /**
-   * 处理发送错误
-   */
-  private handleSendError(error: Error, totalCount: number): any {
-    const errorResponse = {
-      status: '1',
-      reason: error.message || 'Internal server error',
-      success: '0',
-      fail: String(totalCount),
-      array: [],
-    };
-
-    this.logger.error(`SMS send error: ${error.message}`, error.stack);
-    return errorResponse;
   }
 
   /**
@@ -225,6 +213,19 @@ export class SmsService {
   private isValidPhoneNumber(phone: string): boolean {
     // 基本的手机号格式验证
     return /^\+?[1-9]\d{1,14}$/.test(phone);
+  }
+
+  /**
+   * 处理发送错误
+   */
+  private handleSendError(error: Error, phoneCount: number): any {
+    return {
+      status: '1',
+      reason: error.message,
+      success: '0',
+      fail: String(phoneCount),
+      array: [],
+    };
   }
 
   /**

@@ -24,6 +24,8 @@ import { Logger } from '@nestjs/common';
 @Controller('api/v1')
 export class MessageController {
   private readonly logger = new Logger(MessageController.name);
+  private readonly BATCH_SIZE = 100; // 每批处理的号码数量
+
   constructor(
     private readonly smsQueueService: SmsQueueService,
     private readonly metricsService: MetricsService,
@@ -146,17 +148,31 @@ export class MessageController {
   @UseInterceptors(FileInterceptor('file'))
   async batchSendSms(
     @UploadedFile() file: any,
-    @Query('appId') appId: string,
-    @Query('content') content: string,
-    @Query('senderId') senderId?: string,
+    @Body() body: { appId: string; content: string; senderId?: string },
   ): Promise<{
     status: string;
     reason: string;
     success: number;
     fail: number;
   }> {
+    const { appId, content, senderId } = body;
+    this.logger.warn(
+      `[DEBUG] batchSendSms 参数: appId=${appId}, content=${content}, senderId=${senderId}`,
+    );
     this.logger.warn(`[DEBUG] batchSendSms file meta: ${JSON.stringify(file)}`);
     this.metricsService.incrementCounter('message.batch.send.attempt');
+
+    if (!appId) {
+      throw new HttpException(
+        {
+          status: '1',
+          reason: 'INVALID_APP_ID',
+          success: 0,
+          fail: 0,
+        },
+        HttpStatus.BAD_REQUEST,
+      );
+    }
 
     try {
       let fileContent = '';
@@ -180,28 +196,34 @@ export class MessageController {
       let successCount = 0;
       let failCount = 0;
 
-      // 批量处理每个号码
-      for (const number of phoneNumbers) {
-        try {
-          const result = await this.smsService.processSendRequest({
-            appId,
-            phoneNumbers: [number],
-            content,
-            senderId,
-          });
-
-          if (result.status === '0') {
-            successCount++;
-          } else {
-            failCount++;
-          }
-        } catch (error) {
-          failCount++;
-          this.logger.error(
-            `Failed to send SMS to ${number}: ${error.message}`,
-          );
-        }
+      // 将号码分组处理
+      const batches = [];
+      for (let i = 0; i < phoneNumbers.length; i += this.BATCH_SIZE) {
+        const batch = phoneNumbers.slice(i, i + this.BATCH_SIZE);
+        batches.push(
+          this.smsService
+            .processSendRequest({
+              appId,
+              phoneNumbers: batch,
+              content,
+              senderId,
+            })
+            .then((result) => {
+              if (result.status === '0') {
+                successCount += batch.length;
+              } else {
+                failCount += batch.length;
+              }
+            })
+            .catch((error) => {
+              failCount += batch.length;
+              this.logger.error(`Failed to send SMS batch: ${error.message}`);
+            }),
+        );
       }
+
+      // 并发处理所有批次
+      await Promise.all(batches);
 
       // 删除临时文件（如有）
       if (file.path) {
@@ -220,7 +242,12 @@ export class MessageController {
     } catch (error) {
       this.metricsService.incrementCounter('message.batch.send.error');
       throw new HttpException(
-        error.message || 'Failed to process batch send request',
+        {
+          status: '1',
+          reason: error.message || '批量发送失败',
+          success: 0,
+          fail: 0,
+        },
         HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }
