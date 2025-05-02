@@ -1,0 +1,35 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # SMPP服务监控配置，监听主机上的3000端口
+  - job_name: 'smpp-service'
+    metrics_path: '/monitoring/metrics'
+    static_configs:
+      - targets: ['host.docker.internal:13000']
+        labels:
+          service: 'smpp-service'
+
+  # Node Exporter监控（如果你打算添加）
+  #- job_name: 'node-exporter'
+  #  static_configs:
+  #    - targets: ['node-exporter:9100']
+
+  # Kafka监控
+  - job_name: 'kafka'
+    static_configs:
+      - targets: ['kafka:9092']
+        labels:
+          service: 'kafka'
+
+  # PostgreSQL监控（需要安装postgres_exporter）
+  #- job_name: 'postgres'
+  #  static_configs:
+  #    - targets: ['postgres-exporter:9187']
+  #      labels:
+  #        service: 'postgres'

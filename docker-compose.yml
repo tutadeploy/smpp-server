@@ -1,0 +1,159 @@
+version: '3.8'
+
+services:
+  # PostgreSQL数据库服务
+  postgres:
+    image: postgres:14
+    container_name: smpp-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin123
+      POSTGRES_DB: sms_serve
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U admin']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Kafka依赖的ZooKeeper服务
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.3.0
+    container_name: smpp-zookeeper
+    restart: always
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+      ZOOKEEPER_ADMIN_SERVER_PORT: 8080
+      ZOOKEEPER_ADMIN_ENABLE_SERVER: 'true'
+      ZOOKEEPER_ADMIN_SERVER_USER: admin
+      ZOOKEEPER_ADMIN_SERVER_PASSWORD: admin123
+    ports:
+      - '2181:2181'
+    healthcheck:
+      test: echo srvr | nc zookeeper 2181 || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Kafka消息队列服务
+  kafka:
+    image: confluentinc/cp-kafka:7.3.0
+    container_name: smpp-kafka
+    restart: always
+    depends_on:
+      - zookeeper
+    ports:
+      - '9092:9092'
+      - '29092:29092'
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+      KAFKA_SUPER_USERS: 'User:admin'
+      KAFKA_SASL_JAAS_CONFIG: 'org.apache.kafka.common.security.plain.PlainLoginModule required username="admin" password="admin123";'
+      KAFKA_MESSAGE_MAX_BYTES: 2000000000
+      KAFKA_REPLICA_FETCH_MAX_BYTES: 2000000000
+      KAFKA_FETCH_MESSAGE_MAX_BYTES: 2000000000
+      KAFKA_MAX_REQUEST_SIZE: 2000000000
+      KAFKA_SOCKET_REQUEST_MAX_BYTES: 2000000000
+      KAFKA_MAX_PARTITION_FETCH_BYTES: 2000000000
+      KAFKA_SOCKET_RECEIVE_BUFFER_BYTES: 2000000000
+      KAFKA_SOCKET_SEND_BUFFER_BYTES: 2000000000
+      KAFKA_HEAP_OPTS: '-Xmx4G -Xms4G'
+      KAFKA_JVM_PERFORMANCE_OPTS: '-XX:MetaspaceSize=96m -XX:+UseG1GC -XX:MaxGCPauseMillis=20 -XX:InitiatingHeapOccupancyPercent=35 -XX:G1HeapRegionSize=16M -XX:MinMetaspaceFreeRatio=50 -XX:MaxMetaspaceFreeRatio=80'
+    healthcheck:
+      test: kafka-topics --bootstrap-server kafka:9092 --list || exit 1
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Kafka管理界面
+  kafka-ui:
+    image: ghcr.io/kafbat/kafka-ui:latest
+    container_name: smpp-kafka-ui
+    restart: always
+    depends_on:
+      - kafka
+    ports:
+      - '8080:8080'
+    env_file:
+      - ./docker/kafka-ui/auth.env
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
+      SERVER_SERVLET_CONTEXT_PATH: /
+
+  # PgAdmin - PostgreSQL管理界面
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: smpp-pgadmin
+    restart: always
+    depends_on:
+      - postgres
+    ports:
+      - '5050:80'
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@admin.com
+      PGADMIN_DEFAULT_PASSWORD: admin123
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: 'False'
+      PGADMIN_SERVER_JSON_FILE: '/pgadmin4/servers.json'
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+      - ./docker/pgadmin/servers.json:/pgadmin4/servers.json
+
+  # Prometheus监控
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: smpp-prometheus
+    restart: always
+    ports:
+      - '9090:9090'
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+      - '--web.enable-admin-api'
+    environment:
+      ADMIN_USER: admin
+      ADMIN_PASSWORD: admin123
+
+  # Grafana可视化
+  grafana:
+    image: grafana/grafana:latest
+    container_name: smpp-grafana
+    restart: always
+    depends_on:
+      - prometheus
+    ports:
+      - '3000:3000'
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin123
+      GF_USERS_ALLOW_SIGN_UP: 'false'
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning
+
+volumes:
+  postgres_data:
+  pgadmin_data:
+  prometheus_data:
+  grafana_data:
