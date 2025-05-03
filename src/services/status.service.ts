@@ -3,9 +3,10 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Message } from '../entities/message.entity';
 import { StatusResponseDto } from '../api/dto/response.dto';
+import { IStatusService } from './interfaces/status.interface';
 
 @Injectable()
-export class StatusService {
+export class StatusService implements IStatusService {
   private readonly logger = new Logger(StatusService.name);
 
   constructor(
@@ -72,8 +73,7 @@ export class StatusService {
         return {
           msgId: message.messageId,
           number: message.phoneNumber,
-          receiveTime:
-            message.updateTime?.toISOString() || message.sendTime.toISOString(),
+          receiveTime: message.createdAt.toISOString(),
           status: message.status === 'DELIVERED' ? '0' : '1',
           pricedetail: {
             count: 1,

@@ -103,41 +103,62 @@ cp .env.example .env
 - `KAFKA_TOPICS_SMS_RESPONSES`: 短信响应主题
 - `KAFKA_TOPICS_DEAD_LETTER`: 死信主题
 
+### 提供商配置
+
+- `ACTIVE_PROVIDER_ID`: 激活的SMPP提供商ID (默认: prod1)
+
+## 提供商管理
+
+系统支持多个SMPP提供商配置，通过数据库进行管理。默认情况下，系统预设了三个提供商：
+
+1. `prod1`: 本地Mock提供商 (优先级: 10)
+2. `prod2`: 测试服务器Mock (优先级: 20)
+3. `prod3`: 生产环境提供商 (优先级: 5)
+
+### 提供商选择
+
+系统会根据以下规则选择SMPP提供商：
+
+1. 如果设置了环境变量 `ACTIVE_PROVIDER_ID`，则使用指定的提供商。
+2. 如果未设置，则使用在数据库 `providers` 表中状态为启用且优先级最高的提供商。
+
+### 提供商切换
+
+您可以通过两种方式切换提供商：
+
+1. **启动时切换**：修改环境变量 `ACTIVE_PROVIDER_ID` 并重启服务。
+
+```bash
+export ACTIVE_PROVIDER_ID=prod3
+npm run start:dev
+```
+
+2. **运行时切换**：通过API调用切换（需实现API接口）。
+
+### 管理提供商
+
+提供商信息存储在数据库 `providers` 表中，您可以通过数据库操作管理提供商：
+
+```sql
+-- 启用提供商
+UPDATE providers SET status = 1 WHERE provider_id = 'prod3';
+
+-- 禁用提供商
+UPDATE providers SET status = 0 WHERE provider_id = 'prod2';
+
+-- 添加新提供商
+INSERT INTO providers (
+    provider_id, provider_name, host, port, system_id, password, 
+    source_addr, connect_timeout, request_timeout, 
+    reconnect_interval, max_reconnect_attempts, priority, weight, status
+) VALUES (
+    'new_provider', '新提供商', 'smpp.example.com', 2775, 'username', 'password',
+    'SMS', 30000, 45000, 5000, 3, 15, 100, 1
+);
+```
+
 ## 使用说明
 
 ### 开发环境
 
-```bash
-npm run start:dev
 ```
-
-### 生产环境
-
-```bash
-npm run build
-npm run start:prod
-```
-
-### 测试
-
-```bash
-npm run test
-npm run test:cov
-```
-
-## 系统架构
-
-服务使用 NestJS 框架构建，采用模块化架构：
-
-- `src/common`: 共享工具和服务
-  - `logger`: 日志服务
-  - `metrics`: 指标收集服务
-  - `filters`: 全局异常过滤器
-- `src/services`: 核心业务服务
-  - `connection-pool`: 连接池管理
-  - `message-batch`: 消息批处理
-- `src/config`: 配置管理
-
-## 许可证
-
-本项目采用 ISC 许可证。

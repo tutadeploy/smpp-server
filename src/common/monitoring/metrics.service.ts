@@ -12,12 +12,12 @@ export class MetricsService {
     private readonly logger: LoggerService,
   ) {}
 
-  incrementCounter(name: string, value: number = 1): void {
+  incrementCounter(name: string, value = 1): void {
     const current = this.metrics.get(name) || 0;
     this.metrics.set(name, current + value);
   }
 
-  decrementCounter(name: string, value: number = 1): void {
+  decrementCounter(name: string, value = 1): void {
     const current = this.metrics.get(name) || 0;
     this.metrics.set(name, Math.max(0, current - value));
   }

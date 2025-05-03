@@ -9,6 +9,7 @@ export interface SmppSessionConfig {
   reconnectTimer?: number;
   maxReconnectAttempts?: number;
   maxConnections?: number;
+  providerId?: string;
 }
 
 export interface SmppSessionInterface {

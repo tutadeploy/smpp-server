@@ -25,23 +25,23 @@ export class StatusResponseDto {
   @ApiProperty({ description: '状态码，0成功，其他失败' })
   status: string;
 
-  @ApiProperty({ description: '状态描述' })
-  reason: string;
+  @ApiProperty({ description: '原因描述' })
+  reason?: string;
 
-  @ApiProperty({ description: '提交成功的条数' })
-  success: string;
+  @ApiProperty({ description: '成功数量' })
+  success?: string;
 
-  @ApiProperty({ description: '提交失败的条数' })
-  fail: string;
+  @ApiProperty({ description: '失败数量' })
+  fail?: string;
 
-  @ApiProperty({ description: '正在处理的条数' })
-  sending: string;
+  @ApiProperty({ description: '发送中数量' })
+  sending?: string;
 
-  @ApiProperty({ description: '未投递的条数' })
-  notsend: string;
+  @ApiProperty({ description: '未发送数量' })
+  notsend?: string;
 
   @ApiProperty({ description: '状态详情数组' })
-  array: StatusDetailItem[];
+  array?: StatusDetailItem[];
 }
 
 export class PriceDetail {

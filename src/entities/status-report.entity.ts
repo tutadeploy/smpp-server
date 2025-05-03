@@ -8,6 +8,10 @@ import {
   Index,
 } from 'typeorm';
 import { Message } from './message.entity';
+import {
+  ProviderStatusEnum,
+  ProviderStatus,
+} from '../provider/interfaces/provider.interface';
 
 @Entity('status_reports')
 export class StatusReport {
@@ -28,9 +32,13 @@ export class StatusReport {
   @Index()
   providerMessageId: string;
 
-  @Column({ length: 20 })
+  @Column({
+    type: 'enum',
+    enum: ProviderStatusEnum,
+    default: ProviderStatusEnum.PENDING,
+  })
   @Index()
-  status: string;
+  status: ProviderStatus;
 
   @Column({ name: 'error_code', length: 20, nullable: true })
   errorCode: string;

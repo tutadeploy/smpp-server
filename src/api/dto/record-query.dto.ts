@@ -7,13 +7,13 @@ export class RecordQueryDto {
   @IsInt()
   @IsOptional()
   @Type(() => Number)
-  page: number = 1;
+  page = 1;
 
   @ApiProperty({ description: '每页记录数', required: false, default: 10 })
   @IsInt()
   @IsOptional()
   @Type(() => Number)
-  pageSize: number = 10;
+  pageSize = 10;
 
   @ApiProperty({ description: '开始日期', required: false })
   @IsDateString()

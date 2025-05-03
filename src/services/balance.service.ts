@@ -4,9 +4,11 @@ import { Repository, DataSource } from 'typeorm';
 import { Account } from '../entities/account.entity';
 import { Transaction, TransactionType } from '../entities/transaction.entity';
 import { BalanceResponseDto } from '../api/dto/response.dto';
+import { MetricsService } from '../monitoring/metrics.service';
+import { IBalanceService } from './interfaces/balance.interface';
 
 @Injectable()
-export class BalanceService {
+export class BalanceService implements IBalanceService {
   private readonly logger = new Logger(BalanceService.name);
 
   constructor(
@@ -16,6 +18,7 @@ export class BalanceService {
     private readonly transactionRepository: Repository<Transaction>,
     @InjectDataSource()
     private readonly dataSource: DataSource,
+    private readonly metricsService: MetricsService,
   ) {}
 
   /**
@@ -46,55 +49,62 @@ export class BalanceService {
    * 扣除账户余额
    * @param appId 应用ID
    * @param amount 扣减数量
-   * @param description 交易描述
    */
-  async deductBalance(
-    appId: string,
-    amount: number,
-    description: string,
-  ): Promise<void> {
+  async deductBalance(appId: string, amount: number): Promise<void> {
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
     try {
-      await this.accountRepository.manager.transaction(async (manager) => {
-        // 查询账户并锁定
-        const account = await manager
-          .createQueryBuilder(Account, 'account')
-          .setLock('pessimistic_write')
-          .where('account.appId = :appId', { appId })
-          .getOne();
+      // 查找账户
+      const account = await queryRunner.manager.findOne(Account, {
+        where: { appId },
+        lock: { mode: 'pessimistic_write' },
+      });
 
-        if (!account) {
-          throw new Error(`账户不存在: ${appId}`);
-        }
+      if (!account) {
+        throw new Error(`Account not found: ${appId}`);
+      }
 
-        if (account.balance < amount) {
-          throw new Error(`账户余额不足: ${appId}`);
-        }
+      if (account.balance < amount) {
+        throw new Error(`Insufficient balance: ${account.balance} < ${amount}`);
+      }
 
-        // 更新余额
-        account.balance -= amount;
-        await manager.save(account);
+      // 更新余额
+      const oldBalance = account.balance;
+      account.balance -= amount;
+      await queryRunner.manager.save(Account, account);
 
-        // 记录交易
-        const transaction = manager.create(Transaction, {
-          accountId: account.id,
-          appId: account.appId,
-          amount: -amount,
-          balance: account.balance,
-          balanceAfter: account.balance,
-          creditUsed: account.creditUsed,
-          creditUsedAfter: account.creditUsed,
-          type: 'DEDUCT',
-          description,
-        });
-        await manager.save(transaction);
+      // 创建交易记录
+      const transaction = new Transaction();
+      transaction.accountId = account.id;
+      transaction.appId = appId;
+      transaction.amount = -amount;
+      transaction.type = 'DEDUCT';
+      transaction.balance = oldBalance;
+      transaction.balanceAfter = account.balance;
+      transaction.description = '短信发送扣费';
+      await queryRunner.manager.save(Transaction, transaction);
 
-        this.logger.debug(
-          `账户 ${appId} 扣除余额 ${amount}, 当前余额: ${account.balance}`,
-        );
+      await queryRunner.commitTransaction();
+
+      // 更新指标
+      this.metricsService.setGauge('account_balance', account.balance, {
+        app_id: appId,
+      });
+      this.metricsService.incrementCounter('account_transactions', {
+        app_id: appId,
+        type: 'deduct',
       });
     } catch (error) {
-      this.logger.error(`扣除余额失败: ${error.message}`, error.stack);
+      await queryRunner.rollbackTransaction();
+      this.logger.error(
+        `Failed to deduct balance for ${appId}: ${error.message}`,
+        error.stack,
+      );
       throw error;
+    } finally {
+      await queryRunner.release();
     }
   }
 
@@ -104,18 +114,15 @@ export class BalanceService {
    * @returns 账户余额
    */
   async getBalance(appId: string): Promise<number> {
-    try {
-      const account = await this.accountRepository.findOne({
-        where: { appId },
-      });
-      if (!account) {
-        throw new Error(`账户不存在: ${appId}`);
-      }
-      return account.balance;
-    } catch (error) {
-      this.logger.error(`获取余额失败: ${error.message}`, error.stack);
-      throw error;
+    const account = await this.accountRepository.findOne({
+      where: { appId },
+    });
+
+    if (!account) {
+      throw new Error(`Account not found: ${appId}`);
     }
+
+    return account.balance;
   }
 
   /**
@@ -197,8 +204,8 @@ export class BalanceService {
       transaction.amount = amount;
       transaction.type = 'RECHARGE';
       transaction.description = description;
-      transaction.balance = oldBalance; // 交易前余额
-      transaction.balanceAfter = account.balance; // 交易后余额
+      transaction.balance = oldBalance;
+      transaction.balanceAfter = account.balance;
       await queryRunner.manager.save(transaction);
 
       this.logger.debug(`创建交易记录 [${appId}], 金额: ${amount}`);

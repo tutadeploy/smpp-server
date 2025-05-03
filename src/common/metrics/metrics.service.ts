@@ -25,17 +25,17 @@ export class MetricsService {
     this.metrics.set('batch_processing_time', 0);
   }
 
-  increment(metric: string, value: number = 1) {
+  increment(metric: string, value = 1) {
     const current = this.metrics.get(metric) || 0;
     this.metrics.set(metric, current + value);
   }
 
   // 别名，与 increment 功能相同，兼容接口
-  incrementCounter(metric: string, value: number = 1) {
+  incrementCounter(metric: string, value = 1) {
     this.increment(metric, value);
   }
 
-  decrement(metric: string, value: number = 1) {
+  decrement(metric: string, value = 1) {
     const current = this.metrics.get(metric) || 0;
     this.metrics.set(metric, Math.max(0, current - value));
   }

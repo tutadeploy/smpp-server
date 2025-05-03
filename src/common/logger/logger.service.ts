@@ -20,23 +20,24 @@ export class LoggerService implements NestLoggerService {
   }
 
   private getFormat(format: string): winston.Logform.Format {
-    const baseFormat = winston.format.combine(
-      winston.format.timestamp(),
-      this.maskSensitiveData(),
-    );
-
     if (format === 'json') {
-      return winston.format.combine(baseFormat, winston.format.json());
+      return winston.format.combine(winston.format.json());
     }
 
     return winston.format.combine(
-      baseFormat,
-      winston.format.colorize(),
       winston.format.printf(
-        ({ timestamp, level, message, context, ...meta }) =>
-          `${timestamp} [${level}] [${context || 'Global'}]: ${message} ${
-            Object.keys(meta).length ? JSON.stringify(meta) : ''
-          }`,
+        ({ level, message }: { level: string; message: string }) => {
+          if (level === 'error') {
+            return `错误: ${message}`;
+          }
+          if (
+            typeof message === 'string' &&
+            (message.includes('初始化成功') || message.includes('已启动'))
+          ) {
+            return message;
+          }
+          return '';
+        },
       ),
     );
   }

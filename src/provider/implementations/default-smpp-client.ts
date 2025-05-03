@@ -1,15 +1,28 @@
 import { Injectable } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository, MoreThan } from 'typeorm';
 import * as smpp from 'smpp';
 import { Socket } from 'net';
-import { BaseSmppClient } from '../base/smpp-client.base';
-import { SmppSessionConfig } from '../interfaces/smpp-session.interface';
 import {
+  BaseSmppClient,
   SendMessageParams,
   SendMessageResult,
+} from '../base/smpp-client.base';
+import {
   BalanceInfo,
-  MessageStatus,
   MessageResult,
+  ProviderStatus,
+  ProviderStatusEnum,
+  MessageStatusResponse,
 } from '../interfaces/provider.interface';
+import { StatusReport } from '../../entities/status-report.entity';
+import {
+  Message,
+  MessageStatus,
+  MessageStatusEnum,
+} from '../../entities/message.entity';
+import { ConfigService } from '@nestjs/config';
+import { SmppProvider } from '../interfaces/provider.interface';
 
 interface SmppPDU {
   command_status: number;
@@ -22,126 +35,202 @@ interface SmppPDU {
 }
 
 @Injectable()
-export class DefaultSmppClient extends BaseSmppClient {
+export class DefaultSmppClient extends BaseSmppClient implements SmppProvider {
   protected session: smpp.Session;
   private socket: Socket;
   protected reconnectAttempts = 0;
-  protected readonly maxReconnectAttempts = 10;
+  protected readonly maxReconnectAttempts: number = 10;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private enquireLinkTimer: NodeJS.Timeout | null = null;
+  private statusMonitorTimer: NodeJS.Timeout | null = null;
   private isServerUnbind = false;
+  private readonly STATUS_CHECK_INTERVAL = 30000; // 30秒检查一次
+  private readonly MAX_STATUS_CHECK_AGE = 24 * 60 * 60 * 1000; // 24小时
+  private readonly ENQUIRE_LINK_TIMEOUT = 30000; // 30秒超时
+  private readonly ENQUIRE_LINK_INTERVAL = 15000; // 15秒发送一次心跳
+  private lastEnquireLinkResponse: number = Date.now();
+  private connectionState: {
+    lastError?: Error;
+    lastErrorTime?: Date;
+    lastReconnectTime?: Date;
+    consecutiveFailures: number;
+    isReconnecting: boolean;
+    lastUnbindTime?: Date;
+    cooldownPeriod: number;
+  } = {
+    consecutiveFailures: 0,
+    isReconnecting: false,
+    cooldownPeriod: 30000, // 30秒冷却时间
+  };
+  private sessionId: string;
+  private state: string;
+  private systemId: string;
+  private systemType: string;
+  private bindType: string;
+  private addressRange: string;
+  private version: string;
+  private name: string;
+  private config: {
+    host: string;
+    port: number;
+    systemId: string;
+    password: string;
+    systemType: string;
+    addressRange: string;
+    enquireLinkTimer: number;
+  };
+  private readonly INITIAL_RECONNECT_INTERVAL = 5000; // 初始重连间隔5秒
+  private readonly MAX_RECONNECT_INTERVAL = 60000; // 最大重连间隔60秒
 
-  constructor(name: string, config: SmppSessionConfig) {
-    super(name, config);
+  constructor(
+    @InjectRepository(StatusReport)
+    private readonly statusReportRepository: Repository<StatusReport>,
+    @InjectRepository(Message)
+    private readonly messageRepository: Repository<Message>,
+    configService: ConfigService,
+  ) {
+    super(configService);
+    this.sessionId = '';
+    this.state = 'disconnected';
+    this.systemId = configService.get('smpp.systemId');
+    this.systemType = configService.get('smpp.systemType');
+    this.bindType = configService.get('smpp.bindType');
+    this.addressRange = configService.get('smpp.addressRange');
+    this.version = configService.get('smpp.version');
+    this.name = 'DefaultSmppClient';
+
+    // 配置初始化
+    this.config = {
+      host: configService.get('smpp.host'),
+      port: configService.get('smpp.port'),
+      systemId: this.systemId,
+      password: configService.get('smpp.password'),
+      systemType: this.systemType,
+      addressRange: this.addressRange,
+      enquireLinkTimer: configService.get('smpp.enquireLinkTimer', 30000),
+    };
   }
 
-  protected async connect(): Promise<void> {
-    // 清理可能存在的旧连接和定时器
-    await this.cleanup();
+  async connect(): Promise<void> {
+    if (this.connectionState.isReconnecting) {
+      this.logger.warn('已经在进行重连，跳过本次连接请求');
+      return;
+    }
 
-    return new Promise((resolve, reject) => {
-      const attemptConnect = () => {
-        try {
-          // 创建新的 Socket
-          this.socket = new Socket();
+    this.connectionState.isReconnecting = true;
 
-          // 设置 Socket 超时
-          this.socket.setTimeout(
-            parseInt(process.env.SMPP_CONNECTION_TIMEOUT || '30000', 10),
-          );
+    try {
+      // 清理可能存在的旧连接和定时器
+      await this.cleanup();
 
-          // 创建 SMPP 会话
-          this.session = new smpp.Session({
-            socket: this.socket,
-            requestTimeout: parseInt(
-              process.env.SMPP_REQUEST_TIMEOUT || '45000',
-              10,
-            ),
-          });
+      return new Promise((resolve, reject) => {
+        const attemptConnect = () => {
+          try {
+            // 创建新的 Socket
+            this.socket = new Socket();
 
-          // 设置 Socket 事件处理
-          this.socket.on('error', (error: Error) => {
-            this.logger.error(`Socket错误: ${error.message}`, error.stack);
-            this.isConnected = false;
-            this.handleConnectionError();
-          });
-
-          this.socket.on('close', () => {
-            this.logger.warn('Socket连接已关闭');
-            this.isConnected = false;
-            if (!this.isServerUnbind) {
-              this.handleConnectionError();
-            }
-          });
-
-          this.socket.on('timeout', () => {
-            this.logger.error('Socket连接超时');
-            this.isConnected = false;
-            this.handleConnectionError();
-          });
-
-          // 设置 SMPP 会话事件处理
-          this.session.on('error', (error: Error) => {
-            this.logger.error(`SMPP会话错误: ${error.message}`, error.stack);
-            this.isConnected = false;
-            this.handleConnectionError();
-          });
-
-          // 处理解绑请求
-          this.session.on('unbind', () => {
-            this.logger.log('收到服务器解绑请求');
-            this.isServerUnbind = true;
-            void this.doDisconnect();
-          });
-
-          // 处理绑定响应
-          this.session.on('bind_transceiver_resp', (pdu: SmppPDU) => {
-            if (pdu.command_status === 0) {
-              this.isConnected = true;
-              this.reconnectAttempts = 0; // 重置重连计数
-              this.isServerUnbind = false;
-              this.logger.log('SMPP绑定成功');
-              this.setupEventHandlers();
-              resolve();
-            } else {
-              const error = new Error(`SMPP绑定失败: ${pdu.command_status}`);
-              this.logger.error(error.message);
-              reject(error);
-            }
-          });
-
-          // 连接到服务器
-          this.socket.connect(this.config.port, this.config.host, () => {
-            this.logger.log(
-              `正在连接到SMPP服务器: ${this.config.host}:${this.config.port}`,
+            // 设置 Socket 超时
+            this.socket.setTimeout(
+              parseInt(process.env.SMPP_CONNECTION_TIMEOUT || '30000', 10),
             );
-            this.logger.log('Socket连接已建立，正在进行SMPP绑定...');
 
-            // 准备绑定参数，确保所有必需参数都有值
-            const bindParams = {
-              system_id: this.config.systemId || '',
-              password: this.config.password || '',
-              system_type: this.config.systemType || '',
-              interface_version: 52,
-              addr_ton: 0,
-              addr_npi: 0,
-              address_range: this.config.addressRange || '',
-            };
-
-            this.logger.debug('SMPP绑定参数:', {
-              ...bindParams,
-              password: '******', // 不记录实际密码
+            // 创建 SMPP 会话
+            this.session = new smpp.Session({
+              socket: this.socket,
+              requestTimeout: parseInt(
+                process.env.SMPP_REQUEST_TIMEOUT || '45000',
+                10,
+              ),
             });
 
-            this.session.bind_transceiver(bindParams);
-          });
-        } catch (error) {
-          reject(error);
-        }
-      };
+            // 设置 Socket 事件处理
+            this.socket.on('error', (error: Error) => {
+              this.logger.error(`Socket错误: ${error.message}`, error.stack);
+              this.handleConnectionError(error);
+            });
 
-      attemptConnect();
-    });
+            this.socket.on('close', () => {
+              this.logger.warn('Socket连接已关闭');
+              if (!this.isServerUnbind) {
+                this.handleConnectionError(new Error('Socket连接已关闭'));
+              }
+            });
+
+            this.socket.on('timeout', () => {
+              this.logger.error('Socket连接超时');
+              this.handleConnectionError(new Error('Socket连接超时'));
+            });
+
+            // 设置 SMPP 会话事件处理
+            this.session.on('error', (error: Error) => {
+              this.logger.error(`SMPP会话错误: ${error.message}`, error.stack);
+              this.handleConnectionError(error);
+            });
+
+            // 处理解绑请求
+            this.session.on('unbind', () => {
+              this.logger.log('收到服务器解绑请求');
+              this.isServerUnbind = true;
+              void this.doDisconnect();
+            });
+
+            // 处理绑定响应
+            this.session.on('bind_transceiver_resp', (pdu: SmppPDU) => {
+              if (pdu.command_status === 0) {
+                this._isConnected = true;
+                this.reconnectAttempts = 0;
+                this.isServerUnbind = false;
+                this.connectionState.consecutiveFailures = 0;
+                this.connectionState.isReconnecting = false;
+                this.connectionState.lastReconnectTime = new Date();
+                this.logger.log('SMPP绑定成功');
+                this.setupEventHandlers();
+                this.state = 'connected';
+                resolve();
+              } else {
+                const error = new Error(`SMPP绑定失败: ${pdu.command_status}`);
+                this.logger.error(error.message);
+                this.handleConnectionError(error);
+                reject(error);
+              }
+            });
+
+            // 处理enquire_link响应
+            this.session.on('enquire_link_resp', () => {
+              this.lastEnquireLinkResponse = Date.now();
+            });
+
+            // 连接到服务器
+            this.socket.connect(this.config.port, this.config.host, () => {
+              this.logger.log(
+                `正在连接到SMPP服务器: ${this.config.host}:${this.config.port}`,
+              );
+
+              // 准备绑定参数
+              const bindParams = {
+                system_id: this.config.systemId || '',
+                password: this.config.password || '',
+                system_type: this.config.systemType || '',
+                interface_version: 52,
+                addr_ton: 0,
+                addr_npi: 0,
+                address_range: this.config.addressRange || '',
+              };
+
+              this.session.bind_transceiver(bindParams);
+            });
+          } catch (error) {
+            this.handleConnectionError(error);
+            reject(error);
+          }
+        };
+
+        attemptConnect();
+      });
+    } catch (error) {
+      this.connectionState.isReconnecting = false;
+      throw error;
+    }
   }
 
   private async cleanup(): Promise<void> {
@@ -154,6 +243,10 @@ export class DefaultSmppClient extends BaseSmppClient {
       clearInterval(this.enquireLinkTimer);
       this.enquireLinkTimer = null;
     }
+    if (this.statusMonitorTimer) {
+      clearInterval(this.statusMonitorTimer);
+      this.statusMonitorTimer = null;
+    }
 
     // 清理旧连接
     if (this.session) {
@@ -165,50 +258,112 @@ export class DefaultSmppClient extends BaseSmppClient {
     }
   }
 
-  private handleConnectionError(): void {
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
+  protected async handleConnectionError(error: Error): Promise<void> {
+    this.logger.error(
+      `SMPP连接错误 [${this.name}]: ${error.message}`,
+      error.stack,
+    );
+    this._isConnected = false;
+    this.state = 'disconnected';
+    this.connectionState.lastError = error;
+    this.connectionState.lastErrorTime = new Date();
+    this.connectionState.consecutiveFailures++;
+
+    // 检查是否需要进入冷却期
+    if (this.connectionState.lastUnbindTime) {
+      const timeSinceLastUnbind =
+        Date.now() - this.connectionState.lastUnbindTime.getTime();
+      if (timeSinceLastUnbind < this.connectionState.cooldownPeriod) {
+        this.logger.warn(
+          `处于冷却期，等待 ${
+            this.connectionState.cooldownPeriod - timeSinceLastUnbind
+          }ms 后重试`,
+        );
+        await new Promise((resolve) =>
+          setTimeout(
+            resolve,
+            this.connectionState.cooldownPeriod - timeSinceLastUnbind,
+          ),
+        );
+      }
     }
 
-    if (this.reconnectAttempts < this.maxReconnectAttempts) {
-      this.reconnectAttempts++;
-      // 使用更长的初始重连间隔，从10秒开始
-      const delay = Math.min(
-        10000 * Math.pow(1.5, this.reconnectAttempts),
-        60000,
-      ); // 更平缓的指数退避，最大60秒
-      this.logger.log(
-        `将在 ${delay}ms 后进行第 ${this.reconnectAttempts} 次重连尝试`,
-      );
-      this.reconnectTimer = setTimeout(() => {
-        this.isServerUnbind = false; // 重置服务器断开标志
-        void this.connect();
-      }, delay);
-    } else {
+    // 检查是否超过最大重连次数
+    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
       this.logger.error(
-        `已达到最大重连次数 (${this.maxReconnectAttempts})，停止重连`,
+        `达到最大重连次数 ${this.maxReconnectAttempts}，停止重连`,
       );
+      this.connectionState.isReconnecting = false;
+      return;
     }
+
+    // 计算重连间隔
+    const reconnectInterval = this.getReconnectInterval();
+    this.logger.log(
+      `计划在 ${reconnectInterval}ms 后尝试第 ${
+        this.reconnectAttempts + 1
+      } 次重连`,
+    );
+
+    // 设置重连定时器
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+    }
+
+    this.reconnectTimer = setTimeout(async () => {
+      this.reconnectAttempts++;
+      this.logger.log(`正在尝试第 ${this.reconnectAttempts} 次重连...`);
+      try {
+        await this.connect();
+      } catch (error) {
+        this.logger.error(`重连失败: ${error.message}`, error.stack);
+      }
+    }, reconnectInterval);
   }
 
   protected setupEventHandlers(): void {
     if (!this.session) return;
 
-    // 清理旧的 enquire_link 定时器
+    // 清理旧的定时器
     if (this.enquireLinkTimer) {
       clearInterval(this.enquireLinkTimer);
     }
+    if (this.statusMonitorTimer) {
+      clearInterval(this.statusMonitorTimer);
+    }
 
-    // 设置新的 enquire_link 定时器，间隔改为10秒
+    // 设置新的 enquire_link 定时器
+    const enquireLinkInterval = this.config.enquireLinkTimer || 30000;
     this.enquireLinkTimer = setInterval(() => {
-      if (this.isConnected) {
-        this.session.enquire_link();
-      }
-    }, 10000);
+      if (this._isConnected) {
+        // 检查上次enquire_link响应时间
+        const now = Date.now();
+        if (now - this.lastEnquireLinkResponse > this.ENQUIRE_LINK_TIMEOUT) {
+          this.logger.warn(
+            `Enquire link超时: ${now - this.lastEnquireLinkResponse}ms无响应`,
+          );
+          void this.handleConnectionError(new Error('Enquire link timeout'));
+          return;
+        }
 
+        void this.session.enquire_link().catch((error) => {
+          this.logger.error(`Enquire link失败: ${error.message}`);
+        });
+      }
+    }, enquireLinkInterval);
+
+    // 设置消息状态监控定时器
+    this.statusMonitorTimer = setInterval(() => {
+      void this.checkQueuedMessages().catch((error) => {
+        this.logger.error(`检查队列消息失败: ${error.message}`);
+      });
+    }, this.STATUS_CHECK_INTERVAL);
+
+    // 处理状态报告
     this.session.on('deliver_sm', (pdu: SmppPDU) => {
-      void this.handleDeliverSm(pdu);
+      void this.handleDeliverSm(pdu).catch((error) => {
+        this.logger.error(`处理状态报告失败: ${error.message}`, error.stack);
+      });
     });
   }
 
@@ -216,7 +371,7 @@ export class DefaultSmppClient extends BaseSmppClient {
     params: SendMessageParams,
   ): Promise<SendMessageResult> {
     const results = await Promise.all(
-      params.phoneNumbers.map(async (phoneNumber) => {
+      (params.phoneNumbers || [params.phoneNumber]).map(async (phoneNumber) => {
         try {
           const result = await this.submitSm({
             source_addr: params.senderId || this.config.systemId,
@@ -254,6 +409,8 @@ export class DefaultSmppClient extends BaseSmppClient {
 
     const successCount = results.filter((r) => r.status === 'success').length;
     return {
+      status: successCount > 0 ? 'success' : 'failed',
+      messageId: results.length > 0 ? results[0].messageId : '',
       successCount,
       failCount: results.length - successCount,
       messageResults: results,
@@ -262,35 +419,85 @@ export class DefaultSmppClient extends BaseSmppClient {
 
   protected async doQueryMessageStatus(
     messageId: string,
-  ): Promise<MessageStatus> {
-    return new Promise((resolve, reject) => {
-      this.session.query_sm(
-        {
-          message_id: messageId,
-          source_addr: this.config.systemId,
-        },
-        (pdu: SmppPDU) => {
-          if (pdu.command_status === 0) {
-            resolve({
-              messageId,
-              phoneNumber: pdu.destination_addr || '',
-              status: this.convertMessageState(pdu.message_state || 0),
-              deliveredAt: pdu.final_date
-                ? new Date(pdu.final_date).toISOString()
-                : undefined,
-            });
-          } else {
-            reject(new Error(`查询状态失败: ${pdu.command_status}`));
-          }
-        },
+  ): Promise<MessageStatusResponse> {
+    try {
+      const message = await this.messageRepository.findOne({
+        where: { messageId },
+      });
+
+      if (!message) {
+        throw new Error(`Message not found: ${messageId}`);
+      }
+
+      const statusReport = await this.statusReportRepository.findOne({
+        where: { messageId: message.messageId },
+        order: { id: 'DESC' },
+      });
+
+      if (statusReport) {
+        return {
+          messageId,
+          phoneNumber: message.phoneNumber,
+          status: this.convertStatusToProviderStatus(statusReport.status),
+          deliveredAt: statusReport.deliveredAt?.toISOString(),
+          errorMessage: statusReport.errorMessage,
+        };
+      }
+
+      // If no status report found, return current message status
+      return {
+        messageId,
+        phoneNumber: message.phoneNumber,
+        status: this.mapMessageStatusToProviderStatus(message.status),
+        deliveredAt: message.updateTime?.toISOString(),
+      };
+    } catch (error) {
+      this.logger.error(
+        `Failed to query message status: ${error.message}`,
+        error.stack,
       );
-    });
+      throw error;
+    }
+  }
+
+  protected convertStatusToProviderStatus(status: string): ProviderStatus {
+    switch (status.toUpperCase()) {
+      case 'DELIVERED':
+        return ProviderStatusEnum.DELIVERED;
+      case 'FAILED':
+      case 'ERROR':
+        return ProviderStatusEnum.FAILED;
+      case 'EXPIRED':
+        return ProviderStatusEnum.EXPIRED;
+      default:
+        return ProviderStatusEnum.PENDING;
+    }
+  }
+
+  protected mapMessageStatusToProviderStatus(
+    messageStatus: MessageStatus,
+  ): ProviderStatus {
+    switch (messageStatus) {
+      case MessageStatusEnum.DELIVERED:
+        return ProviderStatusEnum.DELIVERED;
+      case MessageStatusEnum.FAILED:
+      case MessageStatusEnum.ERROR:
+        return ProviderStatusEnum.FAILED;
+      case MessageStatusEnum.PENDING:
+      case MessageStatusEnum.QUEUED:
+      case MessageStatusEnum.SENDING:
+      case MessageStatusEnum.PROCESSING:
+        return ProviderStatusEnum.PENDING;
+      default:
+        return ProviderStatusEnum.PENDING;
+    }
   }
 
   async getBalance(): Promise<BalanceInfo> {
     // 通常需要通过特定的API或其他方式获取余额
     // 这里返回一个模拟值
     return {
+      balance: 1000,
       amount: 1000,
       currency: 'CNY',
     };
@@ -308,25 +515,42 @@ export class DefaultSmppClient extends BaseSmppClient {
     return new Promise((resolve, reject) => {
       const smppParams: any = {
         ...params,
-        source_addr_ton: 0, // 源地址类型
-        source_addr_npi: 0, // 源地址编号方案
-        dest_addr_ton: 1, // 目标地址类型(1=国际号码)
-        dest_addr_npi: 1, // 目标地址编号方案(1=E.164)
-        data_coding: 0, // 默认编码
-        registered_delivery: 1, // 请求状态报告
+        source_addr_ton: 0,
+        source_addr_npi: 0,
+        dest_addr_ton: 1,
+        dest_addr_npi: 1,
+        data_coding: 0,
+        registered_delivery: 1,
       };
+
       // 删除所有 undefined 字段
       Object.keys(smppParams).forEach(
         (key) => smppParams[key] === undefined && delete smppParams[key],
       );
-      // 明确处理 short_message
+
+      // 处理 short_message
       if (typeof smppParams.short_message === 'string') {
-        smppParams.short_message = Buffer.from(
-          smppParams.short_message,
-          'utf8',
-        );
+        try {
+          smppParams.short_message = Buffer.from(
+            smppParams.short_message,
+            'utf8',
+          );
+          this.logger.debug('消息内容已转换为 Buffer:', {
+            length: smppParams.short_message.length,
+            content: smppParams.short_message.toString('utf8'),
+          });
+        } catch (error) {
+          this.logger.error(`消息内容转换失败: ${error.message}`, error.stack);
+          reject(error);
+          return;
+        }
       }
-      this.logger.debug('submit_sm 参数:', smppParams);
+
+      this.logger.debug('submit_sm 参数:', {
+        ...smppParams,
+        short_message: smppParams.short_message?.toString('utf8'),
+      });
+
       this.session.submit_sm(smppParams, (pdu: SmppPDU) => {
         if (pdu.command_status === 0) {
           resolve(pdu);
@@ -374,10 +598,75 @@ export class DefaultSmppClient extends BaseSmppClient {
 
   protected async updateMessageStatus(
     messageId: string,
-    status: { status: string; deliveredAt: Date },
+    status: { status: ProviderStatus; deliveredAt: Date },
   ): Promise<void> {
-    // 实现消息状态更新逻辑
-    this.logger.debug(`更新消息状态: ${messageId} -> ${status.status}`);
+    try {
+      const message = await this.messageRepository.findOne({
+        where: { messageId },
+      });
+
+      if (!message) {
+        throw new Error(`Message not found: ${messageId}`);
+      }
+
+      // Convert provider status to message status
+      const messageStatus = this.mapProviderStatusToMessageStatus(
+        status.status,
+      );
+
+      // Update message status
+      await this.messageRepository.update({ messageId }, {
+        status: messageStatus,
+        updateTime: status.deliveredAt,
+      } as Partial<Message>);
+
+      // Save status report
+      const statusReport = new StatusReport();
+      statusReport.messageId = messageId;
+      statusReport.phoneNumber = message.phoneNumber;
+      statusReport.providerId = this.name;
+      statusReport.providerMessageId = message.providerMessageId || messageId;
+      statusReport.status = status.status;
+      statusReport.deliveredAt = status.deliveredAt;
+      statusReport.receivedAt = new Date();
+
+      await this.statusReportRepository.save(statusReport);
+    } catch (error) {
+      this.logger.error(
+        `Failed to update message status: ${error.message}`,
+        error.stack,
+      );
+      throw error;
+    }
+  }
+
+  protected mapProviderStatusToMessageStatus(
+    providerStatus: ProviderStatus,
+  ): MessageStatus {
+    switch (providerStatus) {
+      case 'DELIVERED':
+        return MessageStatusEnum.DELIVERED;
+      case 'FAILED':
+        return MessageStatusEnum.FAILED;
+      case 'EXPIRED':
+        return MessageStatusEnum.EXPIRED;
+      default:
+        return MessageStatusEnum.PENDING;
+    }
+  }
+
+  protected convertMessageState(state: number): ProviderStatus {
+    switch (state) {
+      case 2: // DELIVERED
+        return 'DELIVERED';
+      case 3: // EXPIRED
+        return 'EXPIRED';
+      case 8: // REJECTED
+      case 9: // UNDELIVERABLE
+        return 'FAILED';
+      default:
+        return 'PENDING';
+    }
   }
 
   private formatSmppTime(date: Date): string {
@@ -391,26 +680,174 @@ export class DefaultSmppClient extends BaseSmppClient {
   }
 
   protected async doDisconnect(): Promise<void> {
+    this.logger.log('SMPP解绑成功');
+    this._isConnected = false;
+    this.state = 'disconnected';
+    this.connectionState.lastUnbindTime = new Date();
+    this.isServerUnbind = true;
+
+    // 清理定时器
+    if (this.enquireLinkTimer) {
+      clearInterval(this.enquireLinkTimer);
+      this.enquireLinkTimer = null;
+    }
+
+    if (this.statusMonitorTimer) {
+      clearInterval(this.statusMonitorTimer);
+      this.statusMonitorTimer = null;
+    }
+
+    // 关闭会话
     if (this.session) {
       try {
-        await new Promise<void>((resolve, reject) => {
-          this.session.unbind();
-          this.session.on('unbind_resp', () => {
-            this.logger.log('SMPP解绑成功');
-            if (this.socket) {
-              this.socket.end();
-            }
-            resolve();
-          });
-          this.session.on('error', reject);
-        });
-      } finally {
-        this.session = null;
-        this.socket = null;
+        await this.session.close();
+      } catch (error) {
+        this.logger.error(`关闭会话失败: ${error.message}`, error.stack);
       }
-    } else if (this.socket) {
-      this.socket.end();
-      this.socket = null;
     }
+
+    // 关闭Socket
+    if (this.socket) {
+      try {
+        this.socket.destroy();
+      } catch (error) {
+        this.logger.error(`关闭Socket失败: ${error.message}`, error.stack);
+      }
+    }
+  }
+
+  private async checkQueuedMessages(): Promise<void> {
+    if (!this._isConnected) {
+      this.logger.warn('SMPP连接未建立，跳过队列消息检查');
+      return;
+    }
+
+    try {
+      // 查找所有处于QUEUED状态且创建时间在24小时内的消息
+      const queuedMessages = await this.messageRepository.find({
+        where: {
+          status: MessageStatusEnum.QUEUED,
+          createdAt: MoreThan(new Date(Date.now() - this.MAX_STATUS_CHECK_AGE)),
+        },
+        order: {
+          createdAt: 'ASC',
+        },
+        take: 100, // 每次最多处理100条
+      });
+
+      if (queuedMessages.length === 0) {
+        return;
+      }
+
+      this.logger.log(`发现 ${queuedMessages.length} 条待处理的队列消息`);
+
+      for (const message of queuedMessages) {
+        try {
+          // 查询消息状态
+          const providerStatus = await this.doQueryMessageStatus(
+            message.messageId,
+          );
+
+          // 将提供商状态映射到系统状态
+          const newStatus = this.mapProviderStatusToMessageStatus(
+            providerStatus.status,
+          );
+
+          // 如果状态有变化，更新消息状态
+          if (newStatus !== message.status) {
+            const updateData = {
+              status: newStatus,
+              updateTime: new Date(),
+              errorMessage: providerStatus.errorMessage,
+            };
+
+            await this.messageRepository.update(
+              { messageId: message.messageId },
+              updateData,
+            );
+
+            this.logger.log(
+              `消息 ${message.messageId} 状态已更新: ${newStatus}`,
+            );
+          }
+        } catch (error) {
+          this.logger.error(
+            `检查消息 ${message.messageId} 状态时出错: ${error.message}`,
+          );
+        }
+      }
+    } catch (error) {
+      this.logger.error(`检查队列消息时出错: ${error.message}`);
+    }
+  }
+
+  protected async handleStatusReport(pdu: smpp.PDU): Promise<void> {
+    try {
+      const messageId = pdu.message_id;
+      if (!messageId) {
+        this.logger.warn('Received status report without message ID');
+        return;
+      }
+
+      const status = this.convertMessageState(pdu.message_state || 0);
+      const deliveredAt = pdu.final_date
+        ? new Date(pdu.final_date)
+        : new Date();
+
+      // 更新消息状态
+      await this.updateMessageStatus(messageId, {
+        status,
+        deliveredAt,
+      });
+    } catch (error) {
+      const smppError = error as Error;
+      this.logger.error(
+        `处理状态报告失败: ${smppError.message}`,
+        smppError.stack,
+      );
+    }
+  }
+
+  /**
+   * 获取重连间隔时间（使用指数退避策略）
+   */
+  private getReconnectInterval(): number {
+    // 使用指数退避策略，但限制最大间隔
+    return Math.min(
+      this.INITIAL_RECONNECT_INTERVAL * Math.pow(2, this.reconnectAttempts),
+      this.MAX_RECONNECT_INTERVAL,
+    );
+  }
+
+  getProviderId(): string {
+    return this.name;
+  }
+
+  getSessionId(): string {
+    return this.sessionId;
+  }
+
+  getState(): string {
+    return this.state;
+  }
+
+  getSystemId(): string {
+    return this.systemId;
+  }
+
+  getSystemType(): string {
+    return this.systemType;
+  }
+
+  getBindType(): string {
+    return this.bindType;
+  }
+
+  getAddressRange(): string {
+    return this.addressRange;
+  }
+
+  getVersion(): string {
+    return this.version || '5.0';
   }
 }

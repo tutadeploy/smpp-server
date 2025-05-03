@@ -9,16 +9,19 @@ import {
   UseGuards,
   UseInterceptors,
   UploadedFile,
+  Inject,
 } from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { SendSmsDto, SmsResponseDto } from '../dto/send-sms.dto';
-import { SmsQueueService } from '../../queue/sms-queue.service';
 import { MetricsService } from '../../monitoring/metrics.service';
 import { AuthGuard } from '../../auth/guards/auth.guard';
-import { SmsService } from '../../services/sms.service';
+import { SMS_SERVICE } from '../../services/services.constants';
+import { ISmsService } from '../../services/interfaces/sms.interface';
 import { FileInterceptor } from '@nestjs/platform-express';
 import * as fs from 'fs';
 import { Logger } from '@nestjs/common';
+import { QUEUE_SERVICE } from '../../queue/constants';
+import { IQueueService } from '../../queue/interfaces/queue.interface';
 
 @ApiTags('短信服务')
 @Controller('api/v1')
@@ -27,9 +30,11 @@ export class MessageController {
   private readonly BATCH_SIZE = 100; // 每批处理的号码数量
 
   constructor(
-    private readonly smsQueueService: SmsQueueService,
+    @Inject(QUEUE_SERVICE)
+    private readonly queueService: IQueueService,
     private readonly metricsService: MetricsService,
-    private readonly smsService: SmsService,
+    @Inject(SMS_SERVICE)
+    private readonly smsService: ISmsService,
   ) {}
 
   @Get('sendSms')
@@ -47,7 +52,7 @@ export class MessageController {
     @Query('senderId') senderId?: string,
     @Query('orderId') orderId?: string,
   ): Promise<SmsResponseDto> {
-    this.metricsService.incrementCounter('message.send.attempt');
+    this.metricsService.incrementCounter('message_send_attempt');
     const startTime = Date.now();
 
     // 验证电话号码数量限制
@@ -68,19 +73,19 @@ export class MessageController {
     try {
       const result = await this.smsService.processSendRequest({
         appId,
-        phoneNumbers,
+        numbers,
         content: decodeURIComponent(content),
         senderId,
         orderId,
       });
-      this.metricsService.incrementCounter('message.queue.success');
+      this.metricsService.incrementCounter('message_queue_success');
       this.metricsService.recordHistogram(
-        'message.queue.latency',
+        'message_queue_latency',
         Date.now() - startTime,
       );
       return result;
     } catch (error) {
-      this.metricsService.incrementCounter('message.queue.error');
+      this.metricsService.incrementCounter('message_queue_error');
       return {
         status: '1',
         reason: error.message || 'Failed to queue message',
@@ -100,12 +105,12 @@ export class MessageController {
     type: SmsResponseDto,
   })
   async sendSmsByPost(@Body() dto: SendSmsDto): Promise<SmsResponseDto> {
-    this.metricsService.incrementCounter('message.send.attempt');
+    this.metricsService.incrementCounter('message_send_attempt');
     const startTime = Date.now();
 
     // 验证电话号码数量限制
     const phoneNumbers = dto.numbers.split(',');
-    if (phoneNumbers.length > 1000) {
+    if (phoneNumbers.length > 100) {
       throw new HttpException(
         {
           status: '1',
@@ -119,21 +124,15 @@ export class MessageController {
     }
 
     try {
-      const result = await this.smsService.processSendRequest({
-        appId: dto.appId,
-        phoneNumbers,
-        content: dto.content,
-        senderId: dto.senderId,
-        orderId: dto.orderId,
-      });
-      this.metricsService.incrementCounter('message.queue.success');
+      const result = await this.smsService.processSendRequest(dto);
+      this.metricsService.incrementCounter('message_queue_success');
       this.metricsService.recordHistogram(
-        'message.queue.latency',
+        'message_queue_latency',
         Date.now() - startTime,
       );
       return result;
     } catch (error) {
-      this.metricsService.incrementCounter('message.queue.error');
+      this.metricsService.incrementCounter('message_queue_error');
       return {
         status: '1',
         reason: error.message || 'Failed to queue message',
@@ -145,7 +144,14 @@ export class MessageController {
   }
 
   @Post('batchSendSms')
+  @UseGuards(AuthGuard)
   @UseInterceptors(FileInterceptor('file'))
+  @ApiOperation({ summary: '批量发送短信' })
+  @ApiResponse({
+    status: 200,
+    description: '成功',
+    type: SmsResponseDto,
+  })
   async batchSendSms(
     @UploadedFile() file: any,
     @Body() body: { appId: string; content: string; senderId?: string },
@@ -155,18 +161,14 @@ export class MessageController {
     success: number;
     fail: number;
   }> {
-    const { appId, content, senderId } = body;
-    this.logger.warn(
-      `[DEBUG] batchSendSms 参数: appId=${appId}, content=${content}, senderId=${senderId}`,
-    );
-    this.logger.warn(`[DEBUG] batchSendSms file meta: ${JSON.stringify(file)}`);
-    this.metricsService.incrementCounter('message.batch.send.attempt');
+    this.metricsService.incrementCounter('message_batch_send_attempt');
+    const startTime = Date.now();
 
-    if (!appId) {
+    if (!file) {
       throw new HttpException(
         {
           status: '1',
-          reason: 'INVALID_APP_ID',
+          reason: '请上传文件',
           success: 0,
           fail: 0,
         },
@@ -174,82 +176,82 @@ export class MessageController {
       );
     }
 
-    try {
-      let fileContent = '';
-      if (file.buffer) {
-        fileContent = file.buffer.toString('utf8');
-      } else if (file.path) {
-        fileContent = fs.readFileSync(file.path, 'utf8');
-      } else {
-        throw new HttpException('无法读取上传文件内容', HttpStatus.BAD_REQUEST);
-      }
-      const phoneNumbers = fileContent.split('\n').filter((num) => num.trim());
+    const filePath = file.path;
+    let successCount = 0;
+    let failCount = 0;
 
-      // 验证电话号码数量限制
-      if (phoneNumbers.length > 10000) {
+    try {
+      const fileContent = fs.readFileSync(filePath, 'utf-8');
+      const phoneNumbers = fileContent
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0);
+
+      if (phoneNumbers.length === 0) {
         throw new HttpException(
-          'Too many phone numbers. Maximum allowed is 10000',
+          {
+            status: '1',
+            reason: '文件内容为空',
+            success: 0,
+            fail: 0,
+          },
           HttpStatus.BAD_REQUEST,
         );
       }
 
-      let successCount = 0;
-      let failCount = 0;
-
-      // 将号码分组处理
-      const batches = [];
+      // 分批处理
       for (let i = 0; i < phoneNumbers.length; i += this.BATCH_SIZE) {
         const batch = phoneNumbers.slice(i, i + this.BATCH_SIZE);
-        batches.push(
-          this.smsService
-            .processSendRequest({
-              appId,
-              phoneNumbers: batch,
-              content,
-              senderId,
-            })
-            .then((result) => {
-              if (result.status === '0') {
-                successCount += batch.length;
-              } else {
-                failCount += batch.length;
-              }
-            })
-            .catch((error) => {
-              failCount += batch.length;
-              this.logger.error(`Failed to send SMS batch: ${error.message}`);
-            }),
-        );
+        const numbers = batch.join(',');
+
+        try {
+          const result = await this.smsService.processSendRequest({
+            appId: body.appId,
+            numbers,
+            content: body.content,
+            senderId: body.senderId,
+          });
+
+          if (result.status === '0') {
+            successCount += parseInt(result.success);
+            failCount += parseInt(result.fail);
+          } else {
+            failCount += batch.length;
+          }
+        } catch (error) {
+          this.logger.error(`批量发送失败: ${error.message}`, error.stack);
+          failCount += batch.length;
+        }
       }
 
-      // 并发处理所有批次
-      await Promise.all(batches);
+      this.metricsService.incrementCounter('message_batch_send_success');
+      this.metricsService.recordHistogram(
+        'message_batch_send_latency',
+        Date.now() - startTime,
+      );
 
-      // 删除临时文件（如有）
-      if (file.path) {
-        fs.unlinkSync(file.path);
-      }
-
-      const response = {
+      return {
         status: '0',
-        reason: 'BATCH_SEND_COMPLETED',
+        reason: '批量发送完成',
         success: successCount,
         fail: failCount,
       };
-
-      this.metricsService.incrementCounter('message.batch.send.success');
-      return response;
     } catch (error) {
-      this.metricsService.incrementCounter('message.batch.send.error');
+      this.metricsService.incrementCounter('message_batch_send_error');
       throw new HttpException(
         {
           status: '1',
           reason: error.message || '批量发送失败',
-          success: 0,
-          fail: 0,
+          success: successCount,
+          fail: failCount,
         },
         HttpStatus.INTERNAL_SERVER_ERROR,
       );
+    } finally {
+      // 清理临时文件
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
     }
   }
 }

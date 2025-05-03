@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # PostgreSQL数据库服务
   postgres:
@@ -17,10 +15,11 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U admin']
+      test: ['CMD-SHELL', 'pg_isready -U admin -d sms_serve']
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 30s
 
   # Kafka依赖的ZooKeeper服务
   zookeeper:
@@ -37,10 +36,11 @@ services:
     ports:
       - '2181:2181'
     healthcheck:
-      test: echo srvr | nc zookeeper 2181 || exit 1
+      test: echo ruok | nc localhost 2181 || exit 1
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 15s
 
   # Kafka消息队列服务
   kafka:
@@ -48,42 +48,56 @@ services:
     container_name: smpp-kafka
     restart: always
     depends_on:
-      - zookeeper
+      zookeeper:
+        condition: service_healthy
     ports:
       - '9092:9092'
       - '29092:29092'
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      # 开发环境配置（已注释）
-      # KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
-      # KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
-      # KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
-
-      # 生产环境配置
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://146.196.65.44:29092
-      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:29092
+      # 修改监听器配置
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,EXTERNAL://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
-
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
-      KAFKA_SUPER_USERS: 'User:admin'
-      KAFKA_SASL_JAAS_CONFIG: 'org.apache.kafka.common.security.plain.PlainLoginModule required username="admin" password="admin123";'
-      KAFKA_MESSAGE_MAX_BYTES: 2000000000
-      KAFKA_REPLICA_FETCH_MAX_BYTES: 2000000000
-      KAFKA_FETCH_MESSAGE_MAX_BYTES: 2000000000
-      KAFKA_MAX_REQUEST_SIZE: 2000000000
-      KAFKA_SOCKET_REQUEST_MAX_BYTES: 2000000000
-      KAFKA_MAX_PARTITION_FETCH_BYTES: 2000000000
-      KAFKA_SOCKET_RECEIVE_BUFFER_BYTES: 2000000000
-      KAFKA_SOCKET_SEND_BUFFER_BYTES: 2000000000
-      KAFKA_HEAP_OPTS: '-Xmx1G -Xms1G'
+      # 增加网络稳定性配置
+      KAFKA_SOCKET_REQUEST_MAX_BYTES: 104857600
+      KAFKA_MAX_REQUEST_SIZE: 104857600
+      KAFKA_REPLICA_FETCH_MAX_BYTES: 104857600
+      KAFKA_MESSAGE_MAX_BYTES: 104857600
+      KAFKA_FETCH_MESSAGE_MAX_BYTES: 104857600
+      KAFKA_MAX_PARTITION_FETCH_BYTES: 104857600
+      # 调整超时参数
+      KAFKA_CONNECTIONS_MAX_IDLE_MS: 600000
+      KAFKA_REQUEST_TIMEOUT_MS: 60000
+      KAFKA_SESSION_TIMEOUT_MS: 30000
+      KAFKA_HEARTBEAT_INTERVAL_MS: 9000
+      # 优化内存配置
+      KAFKA_HEAP_OPTS: '-Xmx2G -Xms2G'
       KAFKA_JVM_PERFORMANCE_OPTS: '-XX:MetaspaceSize=96m -XX:+UseG1GC -XX:MaxGCPauseMillis=20 -XX:InitiatingHeapOccupancyPercent=35 -XX:G1HeapRegionSize=16M -XX:MinMetaspaceFreeRatio=50 -XX:MaxMetaspaceFreeRatio=80'
+      KAFKA_NUM_NETWORK_THREADS: '8'
+      KAFKA_NUM_IO_THREADS: '16'
+      KAFKA_NUM_PARTITIONS: '6'
+      KAFKA_NUM_RECOVERY_THREADS_PER_DATA_DIR: '2'
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: '1'
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: '1'
+      KAFKA_LOG_RETENTION_HOURS: '168'
+      KAFKA_LOG_SEGMENT_BYTES: '1073741824'
+      KAFKA_LOG_RETENTION_CHECK_INTERVAL_MS: '300000'
+      # 消费者组配置
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 5000
+      KAFKA_GROUP_MIN_SESSION_TIMEOUT_MS: 10000
+      KAFKA_GROUP_MAX_SESSION_TIMEOUT_MS: 300000
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_OFFSETS_TOPIC_NUM_PARTITIONS: 50
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
     healthcheck:
-      test: kafka-topics --bootstrap-server kafka:9092 --list || exit 1
+      test: nc -z localhost 9092 || exit 1
       interval: 30s
       timeout: 10s
-      retries: 5
+      retries: 3
+      start_period: 60s
 
   # Kafka管理界面
   kafka-ui:
@@ -91,7 +105,8 @@ services:
     container_name: smpp-kafka-ui
     restart: always
     depends_on:
-      - kafka
+      kafka:
+        condition: service_healthy
     ports:
       - '8080:8080'
     env_file:
@@ -108,7 +123,8 @@ services:
     container_name: smpp-pgadmin
     restart: always
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
     ports:
       - '5050:80'
     environment:
@@ -141,6 +157,12 @@ services:
     environment:
       ADMIN_USER: admin
       ADMIN_PASSWORD: admin123
+    healthcheck:
+      test: wget --no-verbose --tries=1 --spider http://localhost:9090/-/healthy || exit 1
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
   # Grafana可视化
   grafana:
@@ -148,7 +170,8 @@ services:
     container_name: smpp-grafana
     restart: always
     depends_on:
-      - prometheus
+      prometheus:
+        condition: service_healthy
     ports:
       - '3000:3000'
     environment:
@@ -158,6 +181,12 @@ services:
     volumes:
       - grafana_data:/var/lib/grafana
       - ./docker/grafana/provisioning:/etc/grafana/provisioning
+    healthcheck:
+      test: wget --no-verbose --tries=1 --spider http://localhost:3000/api/health || exit 1
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
 volumes:
   postgres_data:

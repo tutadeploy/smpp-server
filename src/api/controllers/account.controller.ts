@@ -1,13 +1,25 @@
-import { Controller, Get, Query, UseGuards, Post, Body } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Query,
+  UseGuards,
+  Post,
+  Body,
+  Inject,
+} from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { BalanceResponseDto } from '../dto/response.dto';
-import { BalanceService } from '../../services/balance.service';
+import { BALANCE_SERVICE } from '../../services/services.constants';
+import { IBalanceService } from '../../services/interfaces/balance.interface';
 import { AuthGuard } from '../../auth/guards/auth.guard';
 
 @ApiTags('账户服务')
 @Controller('api/v1')
 export class AccountController {
-  constructor(private readonly balanceService: BalanceService) {}
+  constructor(
+    @Inject(BALANCE_SERVICE)
+    private readonly balanceService: IBalanceService,
+  ) {}
 
   @Get('getBalance')
   @UseGuards(AuthGuard)

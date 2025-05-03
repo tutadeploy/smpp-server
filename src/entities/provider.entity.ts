@@ -9,29 +9,29 @@ import {
 
 @Entity('providers')
 export class Provider {
-  @PrimaryGeneratedColumn('increment')
+  @PrimaryGeneratedColumn({ type: 'bigint' })
   id: number;
 
-  @Column({ name: 'provider_id', length: 32, unique: true })
+  @Column({ name: 'provider_id', unique: true })
   @Index()
   providerId: string;
 
-  @Column({ name: 'provider_name', length: 64 })
+  @Column({ name: 'provider_name' })
   providerName: string;
 
-  @Column({ length: 128 })
+  @Column()
   host: string;
 
   @Column()
   port: number;
 
-  @Column({ name: 'system_id', length: 64 })
+  @Column({ name: 'system_id' })
   systemId: string;
 
-  @Column({ length: 128 })
+  @Column()
   password: string;
 
-  @Column({ name: 'source_addr', length: 20, nullable: true })
+  @Column({ name: 'source_addr', nullable: true })
   sourceAddr: string;
 
   @Column({ name: 'connect_timeout', default: 30000 })
@@ -52,13 +52,19 @@ export class Provider {
   @Column({ default: 100 })
   weight: number;
 
-  @Column({ type: 'smallint', default: 1 })
+  @Column({ default: 1 })
   @Index()
   status: number;
 
-  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
+  @Column({ name: 'system_type', nullable: true })
+  systemType: string;
+
+  @Column({ name: 'max_connections', default: 5 })
+  maxConnections: number;
+
+  @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 
-  @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz' })
+  @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date;
 }

@@ -7,9 +7,23 @@ import { SmsQueueModule } from '../queue/sms-queue.module';
 import { ServicesModule } from '../services/services.module';
 import { MonitoringModule } from '../monitoring/monitoring.module';
 import { AuthModule } from '../auth/auth.module';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { Provider } from '../entities/provider.entity';
+import { Message } from '../entities/message.entity';
+import { StatusReport } from '../entities/status-report.entity';
+import { QueueModule } from '../queue/queue.module';
+import { ProviderModule } from '../provider/provider.module';
 
 @Module({
-  imports: [SmsQueueModule, ServicesModule, MonitoringModule, AuthModule],
+  imports: [
+    ProviderModule,
+    QueueModule,
+    SmsQueueModule,
+    ServicesModule,
+    MonitoringModule,
+    AuthModule,
+    TypeOrmModule.forFeature([Provider, Message, StatusReport]),
+  ],
   controllers: [
     MessageController,
     StatusController,

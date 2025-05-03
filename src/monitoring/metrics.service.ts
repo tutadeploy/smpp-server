@@ -1,18 +1,17 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Counter, Gauge, Histogram, Registry } from 'prom-client';
+import { IMetricsService } from '../provider/interfaces/metrics.interface';
 
 @Injectable()
-export class MetricsService {
+export class MetricsService implements IMetricsService {
   private readonly logger = new Logger(MetricsService.name);
   private readonly registry: Registry;
-  private readonly counters: Map<string, Counter>;
-  private readonly gauges: Map<string, Gauge>;
+  private readonly counters: Map<string, Counter> = new Map();
+  private readonly gauges: Map<string, Gauge> = new Map();
   private readonly histograms: Map<string, Histogram>;
 
   constructor() {
     this.registry = new Registry();
-    this.counters = new Map();
-    this.gauges = new Map();
     this.histograms = new Map();
     this.initializeMetrics();
   }
@@ -35,6 +34,41 @@ export class MetricsService {
     this.createHistogram('sms_length_bytes', 'SMS content length in bytes', {
       buckets: [50, 100, 150, 200, 250, 300],
     });
+
+    // 状态报告批处理指标
+    this.createCounter(
+      'status_reports_received_total',
+      'Total number of status reports received',
+      ['provider'],
+    );
+    this.createCounter(
+      'status_reports_processed_total',
+      'Total number of status reports processed in batches',
+      ['success', 'failed', 'skipped'],
+    );
+    this.createCounter(
+      'status_reports_failed_total',
+      'Total number of failed status reports',
+      ['provider', 'error_code'],
+    );
+    this.createHistogram(
+      'status_report_batch_size',
+      'Size of status report batches',
+      {
+        buckets: [10, 20, 30, 40, 50],
+      },
+    );
+    this.createHistogram(
+      'status_report_batch_processing_duration_seconds',
+      'Duration of batch processing in seconds',
+      {
+        buckets: [0.1, 0.5, 1, 2, 5],
+      },
+    );
+    this.createGauge(
+      'status_report_batch_in_progress',
+      'Number of status report batches currently being processed',
+    );
 
     // 队列相关指标
     this.createGauge('queue_size', 'Current queue size', ['queue_name']);
@@ -183,18 +217,25 @@ export class MetricsService {
   /**
    * 增加计数器值
    */
-  incrementCounter(
-    name: string,
-    labels: Record<string, string> = {},
-    value: number = 1,
-  ): void {
+  incrementCounter(name: string, labels: Record<string, string> = {}): void {
     try {
-      const counter = this.counters.get(name);
-      if (counter) {
-        counter.inc(labels, value);
+      let counter = this.counters.get(name);
+
+      if (!counter) {
+        counter = new Counter({
+          name,
+          help: `Counter for ${name}`,
+          labelNames: Object.keys(labels),
+          registers: [this.registry],
+        });
+        this.counters.set(name, counter);
       }
+
+      counter.inc(labels);
     } catch (error) {
-      this.logger.error(`增加计数器失败 [${name}]: ${error.message}`);
+      this.logger.error(
+        `Failed to increment counter ${name}: ${error.message}`,
+      );
     }
   }
 
@@ -207,12 +248,21 @@ export class MetricsService {
     labels: Record<string, string> = {},
   ): void {
     try {
-      const gauge = this.gauges.get(name);
-      if (gauge) {
-        gauge.set(labels, value);
+      let gauge = this.gauges.get(name);
+
+      if (!gauge) {
+        gauge = new Gauge({
+          name,
+          help: `Gauge for ${name}`,
+          labelNames: Object.keys(labels),
+          registers: [this.registry],
+        });
+        this.gauges.set(name, gauge);
       }
+
+      gauge.set(labels, value);
     } catch (error) {
-      this.logger.error(`设置仪表盘失败 [${name}]: ${error.message}`);
+      this.logger.error(`Failed to set gauge ${name}: ${error.message}`);
     }
   }
 
@@ -243,7 +293,10 @@ export class MetricsService {
       const end = histogram.startTimer(labels);
       return end;
     }
-    return () => {};
+    this.logger.warn(`未找到直方图 [${name}]，无法开始计时`);
+    return () => {
+      // 空函数作为回退策略
+    };
   }
 
   /**
@@ -327,5 +380,17 @@ export class MetricsService {
     } catch (error) {
       this.logger.error(`重置指标失败: ${error.message}`);
     }
+  }
+
+  /**
+   * 记录仪表盘值
+   * 实现IMetricsService接口
+   */
+  recordGauge(
+    name: string,
+    value: number,
+    labels: Record<string, string> = {},
+  ): void {
+    this.setGauge(name, value, labels);
   }
 }

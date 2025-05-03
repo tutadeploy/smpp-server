@@ -1,30 +1,36 @@
-import { Logger } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import {
   SmppProvider,
   SendMessageParams,
   SendMessageResult,
   BalanceInfo,
-  MessageStatus,
+  MessageStatusResponse,
+  ProviderStatus,
+  ProviderStatusEnum,
 } from '../interfaces/provider.interface';
-import {
-  SmppSessionInterface,
-  SmppSessionConfig,
-} from '../interfaces/smpp-session.interface';
+import { SmppSessionInterface } from '../interfaces/smpp-session.interface';
+import { MessageStatusEnum } from '../../entities/message.entity';
 
+export type MessageStatus = MessageStatusEnum;
+export {
+  SendMessageParams,
+  SendMessageResult,
+} from '../interfaces/provider.interface';
+
+@Injectable()
 export abstract class BaseSmppClient implements SmppProvider {
-  protected readonly logger: Logger;
+  protected readonly logger = new Logger(this.constructor.name);
   protected session: SmppSessionInterface;
-  protected isConnected: boolean = false;
-  protected isInitialized: boolean = false;
-  protected reconnectAttempts: number = 0;
+  protected _isConnected = false;
+  protected isInitialized = false;
+  protected reconnectAttempts = 0;
   protected readonly maxReconnectAttempts: number = 5;
+  protected totalMessages = 0;
+  protected successMessages = 0;
+  protected failedMessages = 0;
 
-  constructor(
-    protected readonly name: string,
-    protected readonly config: SmppSessionConfig,
-  ) {
-    this.logger = new Logger(`SmppClient-${name}`);
-  }
+  constructor(protected readonly configService: ConfigService) {}
 
   /**
    * 初始化SMPP客户端
@@ -35,14 +41,14 @@ export abstract class BaseSmppClient implements SmppProvider {
     }
 
     try {
-      this.logger.log(`正在初始化SMPP客户端 ${this.name}`);
+      this.logger.log(`正在初始化SMPP客户端 ${this.constructor.name}`);
       await this.connect();
       this.setupEventHandlers();
       this.isInitialized = true;
-      this.logger.log(`SMPP客户端 ${this.name} 初始化成功`);
+      this.logger.log(`SMPP客户端 ${this.constructor.name} 初始化成功`);
     } catch (error) {
       this.logger.error(
-        `SMPP客户端 ${this.name} 初始化失败: ${error.message}`,
+        `SMPP客户端 ${this.constructor.name} 初始化失败: ${error.message}`,
         error.stack,
       );
       throw error;
@@ -52,7 +58,7 @@ export abstract class BaseSmppClient implements SmppProvider {
   /**
    * 连接到SMPP服务器
    */
-  protected abstract connect(): Promise<void>;
+  abstract connect(): Promise<void>;
 
   /**
    * 设置事件处理器
@@ -65,18 +71,26 @@ export abstract class BaseSmppClient implements SmppProvider {
    */
   async sendMessage(params: SendMessageParams): Promise<SendMessageResult> {
     try {
-      if (!this.isConnected) {
+      if (!this._isConnected) {
         await this.reconnect();
       }
 
       // 实现短信发送逻辑
-      return await this.doSendMessage(params);
+      const result = await this.doSendMessage(params);
+      this.totalMessages++;
+      if (result.status === 'success') {
+        this.successMessages++;
+      } else {
+        this.failedMessages++;
+      }
+      return result;
     } catch (error) {
       this.logger.error(`发送短信失败: ${error.message}`, error.stack);
+      this.failedMessages++;
 
       // 连接错误时尝试重连
       if (this.isConnectionError(error)) {
-        this.isConnected = false;
+        this._isConnected = false;
         try {
           await this.reconnect();
         } catch (reconnectError) {
@@ -89,14 +103,9 @@ export abstract class BaseSmppClient implements SmppProvider {
 
       // 返回失败结果
       return {
-        successCount: 0,
-        failCount: params.phoneNumbers.length,
-        messageResults: params.phoneNumbers.map((phoneNumber) => ({
-          messageId: '',
-          phoneNumber,
-          status: 'failed',
-          errorMessage: error.message,
-        })),
+        messageId: params.messageId,
+        status: 'failed',
+        error: error.message,
       };
     }
   }
@@ -113,27 +122,15 @@ export abstract class BaseSmppClient implements SmppProvider {
    * 查询消息状态
    * @param messageId 消息ID
    */
-  async queryMessageStatus(messageId: string): Promise<MessageStatus> {
+  async queryMessageStatus(messageId: string): Promise<MessageStatusResponse> {
     try {
-      if (!this.isConnected) {
-        await this.reconnect();
+      if (!this._isConnected) {
+        throw new Error('SMPP client is not connected');
       }
-
-      // 实现状态查询逻辑
       return await this.doQueryMessageStatus(messageId);
     } catch (error) {
-      this.logger.error(`查询消息状态失败: ${error.message}`, error.stack);
-
-      if (this.isConnectionError(error)) {
-        this.isConnected = false;
-      }
-
-      return {
-        messageId,
-        phoneNumber: '',
-        status: 'failed',
-        errorMessage: error.message,
-      };
+      this.logger.error(`Failed to query message status: ${error.message}`);
+      throw error;
     }
   }
 
@@ -143,7 +140,7 @@ export abstract class BaseSmppClient implements SmppProvider {
    */
   protected abstract doQueryMessageStatus(
     messageId: string,
-  ): Promise<MessageStatus>;
+  ): Promise<MessageStatusResponse>;
 
   /**
    * 获取账户余额
@@ -155,10 +152,10 @@ export abstract class BaseSmppClient implements SmppProvider {
    */
   async testConnection(): Promise<boolean> {
     try {
-      if (!this.isConnected) {
+      if (!this._isConnected) {
         await this.connect();
       }
-      return this.isConnected;
+      return this._isConnected;
     } catch (error) {
       this.logger.error(`测试连接失败: ${error.message}`, error.stack);
       return false;
@@ -196,19 +193,17 @@ export abstract class BaseSmppClient implements SmppProvider {
    * 转换消息状态
    * @param state SMPP消息状态
    */
-  protected convertMessageState(
-    state: number,
-  ): 'delivered' | 'failed' | 'pending' | 'expired' {
+  protected convertMessageState(state: number): ProviderStatus {
     switch (state) {
       case 2: // DELIVERED
-        return 'delivered';
+        return ProviderStatusEnum.DELIVERED;
       case 3: // EXPIRED
-        return 'expired';
+        return ProviderStatusEnum.EXPIRED;
       case 8: // REJECTED
       case 9: // UNDELIVERABLE
-        return 'failed';
+        return ProviderStatusEnum.FAILED;
       default:
-        return 'pending';
+        return ProviderStatusEnum.PENDING;
     }
   }
 
@@ -216,14 +211,14 @@ export abstract class BaseSmppClient implements SmppProvider {
    * 断开连接
    */
   async disconnect(): Promise<void> {
-    if (this.isConnected) {
+    if (this._isConnected) {
       try {
         await this.doDisconnect();
-        this.isConnected = false;
-        this.logger.log(`SMPP客户端 ${this.name} 已断开连接`);
+        this._isConnected = false;
+        this.logger.log(`SMPP客户端 ${this.constructor.name} 已断开连接`);
       } catch (error) {
         this.logger.error(
-          `SMPP客户端 ${this.name} 断开连接失败: ${error.message}`,
+          `SMPP客户端 ${this.constructor.name} 断开连接失败: ${error.message}`,
           error.stack,
         );
         throw error;
@@ -235,4 +230,29 @@ export abstract class BaseSmppClient implements SmppProvider {
    * 实际执行断开连接
    */
   protected abstract doDisconnect(): Promise<void>;
+
+  abstract getProviderId(): string;
+  abstract getSessionId(): string;
+  abstract getState(): string;
+  abstract getSystemId(): string;
+  abstract getSystemType(): string;
+  abstract getBindType(): string;
+  abstract getAddressRange(): string;
+  abstract getVersion(): string;
+
+  getTotalMessages(): number {
+    return this.totalMessages;
+  }
+
+  getSuccessMessages(): number {
+    return this.successMessages;
+  }
+
+  getFailedMessages(): number {
+    return this.failedMessages;
+  }
+
+  isConnected(): boolean {
+    return this._isConnected;
+  }
 }

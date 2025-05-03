@@ -1,28 +1,34 @@
-import { Module, forwardRef } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
+import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { SmsQueueService } from './sms-queue.service';
-import { SmsQueueConsumer } from './sms-queue.consumer';
-import { KafkaProducerService } from './kafka-producer.service';
-import { KafkaConsumerService } from './kafka-consumer.service';
-import { ServicesModule } from '../services/services.module';
-import { BalanceService } from '../services/balance.service';
-import { Account } from '../entities/account.entity';
-import { Transaction } from '../entities/transaction.entity';
+import { Message } from '../entities/message.entity';
+import { StatusReport } from '../entities/status-report.entity';
+import { ProviderModule } from '../provider/provider.module';
+import { QueueModule } from './queue.module';
+import { SmsQueueService } from './services/sms-queue.service';
+import { SmsQueueConsumerService } from './services/sms-queue-consumer.service';
+import { SMS_QUEUE_SERVICE } from './sms-queue.constants';
+import { ConfigModule } from '@nestjs/config';
+import { MonitoringModule } from '../monitoring/monitoring.module';
 
+/**
+ * 短信队列模块
+ * 负责处理短信发送队列的业务逻辑
+ */
 @Module({
   imports: [
+    QueueModule,
+    TypeOrmModule.forFeature([Message, StatusReport]),
+    ProviderModule,
     ConfigModule,
-    forwardRef(() => ServicesModule),
-    TypeOrmModule.forFeature([Account, Transaction]),
+    MonitoringModule,
   ],
   providers: [
-    KafkaProducerService,
-    KafkaConsumerService,
-    SmsQueueService,
-    SmsQueueConsumer,
-    BalanceService,
+    {
+      provide: SMS_QUEUE_SERVICE,
+      useClass: SmsQueueService,
+    },
+    SmsQueueConsumerService,
   ],
-  exports: [SmsQueueService],
+  exports: [SMS_QUEUE_SERVICE],
 })
 export class SmsQueueModule {}

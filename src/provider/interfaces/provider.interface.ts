@@ -1,9 +1,24 @@
+// import { MessageStatusEnum } from '../../entities/message.entity';
+
 export interface SendMessageParams {
-  phoneNumbers: string[];
+  destination: string;
+  message: string;
+  sourceAddr?: string;
+  dataCoding?: number;
+  priority?: number;
+  validityPeriod?: number;
+  serviceType?: string;
+  registeredDelivery?: number;
+  replaceIfPresent?: number;
+  protocolId?: number;
+  providerId?: string;
+  messageId: string;
   content: string;
-  senderId?: string;
-  orderId?: string;
+  phoneNumber: string;
+  phoneNumbers?: string[];
+  senderId: string;
   scheduleTime?: Date;
+  orderId?: string;
 }
 
 export interface MessageResult {
@@ -15,29 +30,55 @@ export interface MessageResult {
 }
 
 export interface SendMessageResult {
-  successCount: number;
-  failCount: number;
-  messageResults: MessageResult[];
+  messageId?: string;
+  status: string;
+  error?: string;
+  successCount?: number;
+  failCount?: number;
+  messageResults?: MessageResult[];
 }
 
 export interface BalanceInfo {
-  amount: number;
+  balance: number;
   currency: string;
+  amount?: number;
 }
 
-export interface MessageStatus {
+export interface MessageStatusResponse {
   messageId: string;
   phoneNumber: string;
-  status: 'delivered' | 'failed' | 'pending' | 'expired';
+  status: ProviderStatus;
   deliveredAt?: string;
   errorMessage?: string;
 }
 
+export enum ProviderStatusEnum {
+  DELIVERED = 'DELIVERED',
+  FAILED = 'FAILED',
+  PENDING = 'PENDING',
+  EXPIRED = 'EXPIRED',
+}
+
+export type ProviderStatus = 'DELIVERED' | 'FAILED' | 'PENDING' | 'EXPIRED';
+
 export interface SmppProvider {
-  initialize(): Promise<void>;
+  connect(): Promise<void>;
+  disconnect(): Promise<void>;
   sendMessage(params: SendMessageParams): Promise<SendMessageResult>;
-  queryMessageStatus(messageId: string): Promise<MessageStatus>;
+  initialize(): Promise<void>;
+  queryMessageStatus(messageId: string): Promise<MessageStatusResponse>;
   getBalance(): Promise<BalanceInfo>;
   testConnection(): Promise<boolean>;
-  disconnect(): Promise<void>;
+  getProviderId(): string;
+  getSessionId(): string;
+  getState(): string;
+  getSystemId(): string;
+  getSystemType(): string;
+  getBindType(): string;
+  getAddressRange(): string;
+  getVersion(): string;
+  getTotalMessages(): number;
+  getSuccessMessages(): number;
+  getFailedMessages(): number;
+  isConnected(): boolean;
 }

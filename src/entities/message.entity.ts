@@ -10,14 +10,18 @@ import {
 } from 'typeorm';
 import { Account } from './account.entity';
 
-export type MessageStatus =
-  | 'PENDING'
-  | 'QUEUED'
-  | 'SENDING'
-  | 'DELIVERED'
-  | 'FAILED'
-  | 'ERROR'
-  | 'PROCESSING';
+export enum MessageStatusEnum {
+  PENDING = 'PENDING',
+  QUEUED = 'QUEUED',
+  SENDING = 'SENDING',
+  DELIVERED = 'DELIVERED',
+  FAILED = 'FAILED',
+  ERROR = 'ERROR',
+  PROCESSING = 'PROCESSING',
+  EXPIRED = 'EXPIRED',
+}
+
+export type MessageStatus = MessageStatusEnum;
 
 @Entity('messages')
 export class Message {
@@ -52,16 +56,8 @@ export class Message {
 
   @Column({
     type: 'enum',
-    enum: [
-      'PENDING',
-      'QUEUED',
-      'SENDING',
-      'DELIVERED',
-      'FAILED',
-      'ERROR',
-      'PROCESSING',
-    ],
-    default: 'PENDING',
+    enum: MessageStatusEnum,
+    default: MessageStatusEnum.PENDING,
   })
   status: MessageStatus;
 

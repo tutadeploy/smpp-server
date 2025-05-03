@@ -75,7 +75,9 @@ export class ResponseTransformerInterceptor<T>
           };
 
           this.logger.error(
-            `请求处理失败: ${error.message}, context: ${JSON.stringify(errorContext)}`,
+            `请求处理失败: ${error.message}, context: ${JSON.stringify(
+              errorContext,
+            )}`,
             error.stack,
           );
 
@@ -106,7 +108,9 @@ export class ResponseTransformerInterceptor<T>
         };
 
         this.logger.error(
-          `系统错误: ${error.message}, context: ${JSON.stringify(errorContext)}`,
+          `系统错误: ${error.message}, context: ${JSON.stringify(
+            errorContext,
+          )}`,
           error.stack,
         );
 
