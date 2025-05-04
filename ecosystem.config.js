@@ -83,24 +83,6 @@ module.exports = {
       instances: 2,
       exec_mode: 'cluster',
       max_memory_restart: '1G',
-      env: {
-        NODE_ENV: 'production',
-        ACTIVE_PROVIDER_ID: 'prod3',
-        PORT: 13000,
-        SMPP_HOST: '165.84.188.148',
-        SMPP_PORT: 2775,
-        SMPP_SYSTEM_ID: 'MBC137',
-        SMPP_PASSWORD: 'qg7Iuhn7'
-      },
-      env_production: {
-        NODE_ENV: 'production',
-        ACTIVE_PROVIDER_ID: 'prod3',
-        PORT: 13000,
-        SMPP_HOST: '165.84.188.148',
-        SMPP_PORT: 2775,
-        SMPP_SYSTEM_ID: 'MBC137',
-        SMPP_PASSWORD: 'qg7Iuhn7'
-      },
       env_file: '.env.prod',
       log_date_format: 'YYYY-MM-DD HH:mm:ss',
       merge_logs: true,
