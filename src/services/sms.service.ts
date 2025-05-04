@@ -278,7 +278,7 @@ export class SmsService implements ISmsService {
   }
 
   private isValidPhoneNumber(phone: string): boolean {
-    return /^\d+$/.test(phone);
+    return /^\d{8,}$/.test(phone);
   }
 
   private handleSendError(error: Error, phoneCount: number): SmsResponseDto {

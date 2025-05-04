@@ -36,10 +36,9 @@ lerna-debug.log*
 
 # Environment variables
 .env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
+.env.prod
+.env.dev
+.env.test
 
 # temp files
 *.swp
@@ -53,4 +52,3 @@ lerna-debug.log*
 /设计文档
 /测试文档
 线上问题.md
-.env.prod

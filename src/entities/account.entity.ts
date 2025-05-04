@@ -69,7 +69,7 @@ export class Account {
   @Column({ name: 'api_key', length: 64, nullable: true })
   apiKey: string;
 
-  @Column({ name: 'is_active', default: true })
+  @Column({ name: 'active', default: true })
   active: boolean;
 
   @Column({ type: 'jsonb', nullable: true })

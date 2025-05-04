@@ -421,7 +421,7 @@ export default (): Configuration => {
         Provider,
         Transaction,
       ],
-      synchronize: process.env.DB_SYNCHRONIZE === 'false',
+      synchronize: process.env.DB_SYNCHRONIZE === 'true',
       logging: ['error'],
       maxQueryExecutionTime: 0,
       ssl: process.env.DB_SSL === 'true',

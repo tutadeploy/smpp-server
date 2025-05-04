@@ -18,7 +18,7 @@ import { ProviderModule } from './provider/provider.module';
     ConfigModule.forRoot({
       isGlobal: true,
       load: [configuration],
-      envFilePath: ['.env'],
+      envFilePath: ['.env', `.env.${process.env.NODE_ENV}`],
       expandVariables: true,
       cache: true,
     }),

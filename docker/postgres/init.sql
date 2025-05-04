@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS accounts (
     monthly_limit INTEGER NOT NULL DEFAULT 300000, -- 每月发送限制
     status VARCHAR(32) NOT NULL DEFAULT 'ACTIVE', -- 账户状态：ACTIVE-激活，INACTIVE-未激活
     api_key VARCHAR(64), -- API密钥，用于接口认证
-    is_active BOOLEAN NOT NULL DEFAULT true, -- 是否激活：true-激活，false-未激活
+    active BOOLEAN NOT NULL DEFAULT true, -- 是否激活：true-激活，false-未激活
     settings JSONB, -- 账户配置信息，JSON格式
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP, -- 创建时间
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP, -- 更新时间
@@ -57,7 +57,7 @@ CREATE TABLE IF NOT EXISTS transactions (
     balance_after DECIMAL(10, 2) NOT NULL, -- 交易后余额
     credit_used DECIMAL(10, 2) NOT NULL DEFAULT 0, -- 交易前已用信用额度
     credit_used_after DECIMAL(10, 2) NOT NULL DEFAULT 0, -- 交易后已用信用额度
-    type VARCHAR(20) NOT NULL CHECK (type IN ('RECHARGE', 'DEDUCT', 'REFUND', 'GIFT')), -- 交易类型
+    type VARCHAR(20) NOT NULL DEFAULT 'RECHARGE' CHECK (type IN ('RECHARGE', 'DEDUCT', 'REFUND', 'GIFT')), -- 交易类型，默认RECHARGE
     description TEXT NOT NULL, -- 交易描述
     metadata JSONB, -- 交易元数据
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP, -- 创建时间
@@ -146,6 +146,7 @@ CREATE TABLE IF NOT EXISTS providers (
 
 CREATE INDEX IF NOT EXISTS idx_providers_status ON providers(status);
 CREATE INDEX IF NOT EXISTS idx_providers_priority ON providers(priority);
+CREATE INDEX IF NOT EXISTS idx_providers_provider_id ON providers(provider_id);
 
 -- 创建价格方案表
 CREATE TABLE IF NOT EXISTS price_plans (
@@ -179,12 +180,12 @@ INSERT INTO services (service_id, service_name, api_key, api_secret, status, sig
 VALUES ('admin', '管理后台', 'admin', 'admin123', 1, 'md5', 300, 1000)
 ON CONFLICT (service_id) DO NOTHING;
 
-INSERT INTO accounts (id, app_id, app_name, service_id, balance, gift_balance, credit_limit, credit_used, daily_limit, monthly_limit, status, is_active)
+INSERT INTO accounts (id, app_id, app_name, service_id, balance, gift_balance, credit_limit, credit_used, daily_limit, monthly_limit, status, active)
 VALUES (uuid_generate_v4(), 'ADMIN', '管理后台', 'admin', 0.0, 0.0, 0.0, 0.0, 10000, 300000, 'ACTIVE', true)
 ON CONFLICT (app_id) DO NOTHING;
 
 -- 删除原有的测试提供商，添加三个SMPP提供商配置
-DELETE FROM providers WHERE provider_id = 'PROVIDER1';
+DELETE FROM providers;
 
 -- 提供商1 - 本地测试用(Mock)
 INSERT INTO providers (
@@ -195,4 +196,10 @@ INSERT INTO providers (
     'prod2', '测试服务器Mock', '123.253.110.98', 2775, 'mock_smpp', 'password', 'TEST', 30000, 45000, 5000, 3, 20, 50, 1, 'mock', 5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
 ), (
     'prod3', '生产环境供应商', '165.84.188.148', 2775, 'MBC137', 'qg7Iuhn7', 'SMS', 30000, 45000, 5000, 3, 5, 200, 1, 'MBC', 5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-); 
+) ON CONFLICT (provider_id) DO UPDATE SET 
+    provider_name = EXCLUDED.provider_name,
+    host = EXCLUDED.host,
+    port = EXCLUDED.port,
+    system_id = EXCLUDED.system_id,
+    password = EXCLUDED.password,
+    updated_at = CURRENT_TIMESTAMP; 
