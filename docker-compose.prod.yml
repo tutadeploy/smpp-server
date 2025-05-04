@@ -1,0 +1,214 @@
+services:
+  # PostgreSQL数据库服务
+  postgres:
+    restart: unless-stopped
+    environment:
+      POSTGRES_HOST_AUTH_METHOD: md5  # 更安全的认证方式
+    ports:
+      - '123.253.110.98:5432:5432'  # 允许从外部直接访问
+    volumes:
+      - /data/postgres:/var/lib/postgresql/data  # 使用服务器上的绝对路径
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "200m"
+        max-file: "10"
+
+  # Kafka依赖的ZooKeeper服务
+  zookeeper:
+    restart: unless-stopped
+    ports:
+      - '127.0.0.1:2181:2181'
+    volumes:
+      - /data/zookeeper:/data
+      - /data/zookeeper/logs:/datalog
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "200m"
+        max-file: "5"
+
+  # Kafka消息队列服务
+  kafka:
+    restart: unless-stopped
+    ports:
+      - '127.0.0.1:9092:9092'  # 仅允许本地访问内部端口
+      - '123.253.110.98:29092:29092'  # 使用服务器IP暴露外部端口
+    environment:
+      # 修改监听器配置以使用实际服务器IP
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://123.253.110.98:29092
+      # 增加安全配置
+      KAFKA_LOG_RETENTION_HOURS: '72'  # 减少保留时间，节省磁盘空间
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'false'  # 禁止自动创建主题
+    volumes:
+      - /data/kafka:/var/lib/kafka/data
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 8G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "500m"
+        max-file: "10"
+
+  # Kafka管理界面
+  kafka-ui:
+    restart: unless-stopped
+    ports:
+      - '127.0.0.1:8080:8080'  # 限制只能本地访问，通过反向代理暴露
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+    environment:
+      # 使用实际服务器地址
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
+      SERVER_SERVLET_CONTEXT_PATH: /kafka-ui
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
+
+  # PgAdmin - PostgreSQL管理界面
+  pgadmin:
+    restart: unless-stopped
+    ports:
+      - '127.0.0.1:5050:80'  # 限制只能本地访问，通过反向代理暴露
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+    environment:
+      PGADMIN_CONFIG_ENHANCED_COOKIE_PROTECTION: 'True'
+      PGADMIN_CONFIG_LOGIN_BANNER: "授权系统 - 仅限内部使用"
+      PGADMIN_CONFIG_CONSOLE_LOG_LEVEL: 'WARNING'
+    volumes:
+      - /data/pgadmin:/var/lib/pgadmin
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "3"
+
+  # Prometheus监控
+  prometheus:
+    restart: unless-stopped
+    ports:
+      - '127.0.0.1:9090:9090'  # 限制只能本地访问，通过反向代理暴露
+    volumes:
+      - /data/prometheus:/prometheus
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 2G
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=15d'  # 明确设置数据保留时间
+      - '--web.external-url=http://123.253.110.98/prometheus'  # 设置外部URL
+      - '--web.route-prefix=/prometheus'  # 设置URL前缀
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "200m"
+        max-file: "5"
+
+  # Grafana可视化
+  grafana:
+    restart: unless-stopped
+    ports:
+      - '127.0.0.1:3000:3000'  # 限制只能本地访问，通过反向代理暴露
+    environment:
+      GF_SERVER_ROOT_URL: "http://123.253.110.98/grafana"  # 设置服务器根URL
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD:-admin123}"  # 使用环境变量
+      GF_SECURITY_ALLOW_EMBEDDING: "true"
+    volumes:
+      - /data/grafana:/var/lib/grafana
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "200m"
+        max-file: "5"
+
+  # Nginx反向代理 - 新增服务，用于安全访问其他服务的Web界面
+  nginx:
+    image: nginx:stable
+    container_name: smpp-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"  # 如果配置了HTTPS
+    volumes:
+      - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./docker/nginx/conf.d:/etc/nginx/conf.d:ro
+      - /data/nginx/logs:/var/log/nginx
+      # - ./docker/nginx/ssl:/etc/nginx/ssl:ro  # 如果配置了HTTPS
+    depends_on:
+      - kafka-ui
+      - pgadmin
+      - prometheus
+      - grafana
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "10"
+
+volumes:
+  # 在生产环境中，我们不使用Docker命名卷，而是使用服务器上的绝对路径
+  postgres_data:
+    driver_opts:
+      type: none
+      device: /data/postgres
+      o: bind
+  pgadmin_data:
+    driver_opts:
+      type: none
+      device: /data/pgadmin
+      o: bind
+  prometheus_data:
+    driver_opts:
+      type: none
+      device: /data/prometheus
+      o: bind
+  grafana_data:
+    driver_opts:
+      type: none
+      device: /data/grafana
+      o: bind
+
+networks:
+  default:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+          gateway: 172.28.0.1 
