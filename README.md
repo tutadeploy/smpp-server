@@ -48,7 +48,7 @@ cp .env.example .env
 
 - `APP_NAME`: 服务名称（默认：smpp-service）
 - `APP_ENV`: 环境（development/production）
-- `APP_PORT`: 服务端口（默认：3000）
+- `APP_PORT`: 服务端口（默认：13000）
 
 ### 日志配置
 
