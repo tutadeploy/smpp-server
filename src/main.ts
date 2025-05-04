@@ -14,6 +14,14 @@ process.env.KAFKAJS_LOG_LEVEL = 'NOTHING';
 process.env.DISABLE_KAFKAJS_LOGGER = 'true';
 
 async function bootstrap() {
+  // 添加环境变量调试信息
+  console.log('======= 环境变量调试 =======');
+  console.log(`NODE_ENV: ${process.env.NODE_ENV}`);
+  console.log(`DB_HOST直接读取: ${process.env.DB_HOST}`);
+  console.log(`DB_DATABASE直接读取: ${process.env.DB_DATABASE}`);
+  console.log(`SMPP_HOST直接读取: ${process.env.SMPP_HOST}`);
+  console.log('===========================');
+
   const app = await NestFactory.create(AppModule, {
     // 启用NestJS默认日志
     logger: ['error', 'warn', 'log', 'debug', 'verbose'],
@@ -44,6 +52,11 @@ async function bootstrap() {
 
   const port = configService.get<number>('app.port', 13000);
   await app.listen(port);
+
+  const dbHost = configService.get('database.host');
+  const dbPort = configService.get('database.port');
+  const dbName = configService.get('database.database');
+  console.log(`[启动信息] 数据库连接: ${dbHost}:${dbPort} / ${dbName}`);
 
   console.log(`SMPP服务已启动，运行在端口: ${port}`);
   loggerService.log(`SMPP服务已启动，运行在端口: ${await app.getUrl()}`);

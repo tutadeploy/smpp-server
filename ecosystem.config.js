@@ -7,24 +7,6 @@ module.exports = {
       instances: 1,
       exec_mode: 'fork',
       max_memory_restart: '1G',
-      env: {
-        NODE_ENV: 'development',
-        ACTIVE_PROVIDER_ID: 'prod1',
-        PORT: 13000,
-        SMPP_HOST: 'localhost',
-        SMPP_PORT: 2775,
-        SMPP_SYSTEM_ID: 'mock_smpp',
-        SMPP_PASSWORD: 'password'
-      },
-      env_development: {
-        NODE_ENV: 'development',
-        ACTIVE_PROVIDER_ID: 'prod1',
-        PORT: 13000,
-        SMPP_HOST: 'localhost',
-        SMPP_PORT: 2775,
-        SMPP_SYSTEM_ID: 'mock_smpp',
-        SMPP_PASSWORD: 'password'
-      },
       env_file: '.env.dev',
       log_date_format: 'YYYY-MM-DD HH:mm:ss',
       merge_logs: true,
@@ -46,24 +28,6 @@ module.exports = {
       instances: 1,
       exec_mode: 'fork',
       max_memory_restart: '1G',
-      env: {
-        NODE_ENV: 'test',
-        ACTIVE_PROVIDER_ID: 'prod2',
-        PORT: 13000,
-        SMPP_HOST: '165.84.188.148',
-        SMPP_PORT: 2775,
-        SMPP_SYSTEM_ID: 'mock_smpp',
-        SMPP_PASSWORD: 'password'
-      },
-      env_test: {
-        NODE_ENV: 'test',
-        ACTIVE_PROVIDER_ID: 'prod2',
-        PORT: 13000,
-        SMPP_HOST: '165.84.188.148',
-        SMPP_PORT: 2775,
-        SMPP_SYSTEM_ID: 'mock_smpp',
-        SMPP_PASSWORD: 'password'
-      },
       env_file: '.env.test',
       log_date_format: 'YYYY-MM-DD HH:mm:ss',
       merge_logs: true,
