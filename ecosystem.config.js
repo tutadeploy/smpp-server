@@ -10,8 +10,11 @@ module.exports = {
       env: {
         NODE_ENV: 'development',
         ACTIVE_PROVIDER_ID: 'prod1',
-        DEBUG: '*',
-        PORT: 13000
+        PORT: 13000,
+        SMPP_HOST: 'localhost',
+        SMPP_PORT: 2775,
+        SMPP_SYSTEM_ID: 'mock_smpp',
+        SMPP_PASSWORD: 'password'
       },
       env_file: '.env.dev',
       log_date_format: 'YYYY-MM-DD HH:mm:ss',
@@ -37,7 +40,11 @@ module.exports = {
       env: {
         NODE_ENV: 'test',
         ACTIVE_PROVIDER_ID: 'prod2',
-        PORT: 13000
+        PORT: 13000,
+        SMPP_HOST: '165.84.188.148',
+        SMPP_PORT: 2775,
+        SMPP_SYSTEM_ID: 'mock_smpp',
+        SMPP_PASSWORD: 'password'
       },
       env_file: '.env.test',
       log_date_format: 'YYYY-MM-DD HH:mm:ss',
@@ -46,9 +53,7 @@ module.exports = {
       error_file: 'logs/test/error.log',
       out_file: 'logs/test/output.log',
       time: true,
-      watch: true,
-      watch_delay: 1000,
-      ignore_watch: ['node_modules', 'logs', 'dist'],
+      watch: false,  // 测试环境不需要监视文件变化
       max_restarts: 10,
       restart_delay: 4000,
     },
@@ -63,7 +68,11 @@ module.exports = {
       env: {
         NODE_ENV: 'production',
         ACTIVE_PROVIDER_ID: 'prod3',
-        PORT: 13000
+        PORT: 13000,
+        SMPP_HOST: '165.84.188.148',
+        SMPP_PORT: 2775,
+        SMPP_SYSTEM_ID: 'MBC137',
+        SMPP_PASSWORD: 'qg7Iuhn7'
       },
       env_file: '.env.prod',
       log_date_format: 'YYYY-MM-DD HH:mm:ss',
@@ -72,9 +81,7 @@ module.exports = {
       error_file: 'logs/prod/error.log',
       out_file: 'logs/prod/output.log',
       time: true,
-      watch: true,
-      watch_delay: 1000,
-      ignore_watch: ['node_modules', 'logs', 'dist'],
+      watch: false,  // 生产环境禁用自动重启
       max_restarts: 10,
       restart_delay: 4000,
     }
