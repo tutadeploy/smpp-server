@@ -588,54 +588,109 @@ export class DefaultSmppClient extends BaseSmppClient implements SmppProvider {
   }
 
   private async handleDeliveryReport(pdu: SmppPDU): Promise<void> {
-    this.logger.warn(`[调试] 收到状态报告 PDU: ${JSON.stringify(pdu)}`);
     try {
-      // 解析 message_id 和 stat 字段
-      let messageId = '';
-      let stat = '';
-      let errorCode = '';
-      if (pdu.short_message && pdu.short_message.message) {
-        const msg = pdu.short_message.message;
-        // 提取 id:xxxxxxx
-        const idMatch = msg.match(/id:([0-9A-Za-z]+)/);
-        if (idMatch) messageId = idMatch[1];
-        // 提取 stat:XXXXXX
-        const statMatch = msg.match(/stat:([A-Z]+)/);
-        if (statMatch) stat = statMatch[1];
-        // 提取 err:XXX
-        const errMatch = msg.match(/err:([0-9]+)/);
-        if (errMatch) errorCode = errMatch[1];
-      }
+      // 1. 解析状态报告
+      const messageContent = pdu.short_message?.message || '';
+      const [messageId, stat, err] = this.parseDeliveryReport(messageContent);
+
       if (!messageId) {
+        this.logger.warn('状态报告中没有 message_id');
+        return;
+      }
+
+      // 2. 转换状态
+      const status = this.convertStatusToProviderStatus(stat);
+      const errorCode = err || '000';
+
+      // 3. 查找消息记录（带重试机制）
+      let message = await this.findMessageByProviderId(messageId);
+      if (!message) {
+        // 等待1秒后重试
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        message = await this.findMessageByProviderId(messageId);
+      }
+
+      if (!message) {
         this.logger.error(
-          `[状态报告解析失败] 未找到message_id, PDU: ${JSON.stringify(pdu)}`,
+          `找不到对应的消息记录: provider_message_id=${messageId}`,
         );
         return;
       }
-      const status = this.convertStatusToProviderStatus(stat);
-      const deliveredAt = pdu.final_date
-        ? new Date(pdu.final_date)
-        : new Date();
-      this.logger.log(
-        `[状态报告] messageId=${messageId}, stat=${stat}, status=${status}, err=${errorCode}, deliveredAt=${deliveredAt.toISOString()}`,
-      );
-      // 更新消息状态和写入状态报告
-      await this.updateMessageStatus(messageId, {
+
+      // 4. 更新消息状态
+      await this.updateMessageStatus(message.messageId, {
         status,
-        deliveredAt,
+        errorCode,
+        deliveredAt: new Date(),
+      });
+
+      // 5. 记录状态报告
+      await this.recordStatusReport(message, {
+        providerMessageId: messageId,
+        status,
         errorCode,
         stat,
-        rawData:
-          pdu.short_message && pdu.short_message.message
-            ? pdu.short_message.message
-            : '',
+        deliveredAt: new Date(),
+      });
+
+      this.logger.log(
+        `[状态报告] messageId=${messageId}, stat=${stat}, status=${status}, err=${errorCode}, deliveredAt=${new Date().toISOString()}`,
+      );
+    } catch (error) {
+      this.logger.error(`处理状态报告失败: ${error.message}`, error.stack);
+    }
+  }
+
+  private async findMessageByProviderId(
+    providerMessageId: string,
+  ): Promise<Message | null> {
+    try {
+      return await this.messageRepository.findOne({
+        where: { providerMessageId },
       });
     } catch (error) {
-      const smppError = error as Error;
-      this.logger.error(
-        `处理状态报告失败: ${smppError.message}`,
-        smppError.stack,
-      );
+      this.logger.error(`查找消息失败: ${error.message}`);
+      return null;
+    }
+  }
+
+  private parseDeliveryReport(message: string): [string, string, string] {
+    const messageIdMatch = message.match(/id:(\d+)/);
+    const statMatch = message.match(/stat:([A-Z]+)/);
+    const errMatch = message.match(/err:(\d+)/);
+
+    return [
+      messageIdMatch ? messageIdMatch[1] : '',
+      statMatch ? statMatch[1] : '',
+      errMatch ? errMatch[1] : '000',
+    ];
+  }
+
+  private async recordStatusReport(
+    message: Message,
+    report: {
+      providerMessageId: string;
+      status: ProviderStatus;
+      errorCode: string;
+      stat: string;
+      deliveredAt: Date;
+    },
+  ): Promise<void> {
+    try {
+      await this.statusReportRepository.save({
+        messageId: message.messageId,
+        phoneNumber: message.phoneNumber,
+        providerId: this.name,
+        providerMessageId: report.providerMessageId,
+        status: report.status,
+        errorCode: report.errorCode,
+        errorMessage: `SMPP状态: ${report.stat}`,
+        deliveredAt: report.deliveredAt,
+        receivedAt: new Date(),
+        rawData: JSON.stringify(report),
+      });
+    } catch (error) {
+      this.logger.error(`记录状态报告失败: ${error.message}`);
     }
   }
 
