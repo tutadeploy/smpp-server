@@ -191,6 +191,7 @@ export class DefaultSmppClient extends BaseSmppClient implements SmppProvider {
               } else {
                 const error = new Error(`SMPP绑定失败: ${pdu.command_status}`);
                 this.logger.error(error.message);
+                this.connectionState.isReconnecting = false;
                 this.handleConnectionError(error);
                 reject(error);
               }
@@ -222,6 +223,7 @@ export class DefaultSmppClient extends BaseSmppClient implements SmppProvider {
               this.session.bind_transceiver(bindParams);
             });
           } catch (error) {
+            this.connectionState.isReconnecting = false;
             this.handleConnectionError(error);
             reject(error);
           }
@@ -270,6 +272,7 @@ export class DefaultSmppClient extends BaseSmppClient implements SmppProvider {
     this.connectionState.lastError = error;
     this.connectionState.lastErrorTime = new Date();
     this.connectionState.consecutiveFailures++;
+    this.connectionState.isReconnecting = false;
 
     // 取消冷却期逻辑，直接重连
 
@@ -287,7 +290,7 @@ export class DefaultSmppClient extends BaseSmppClient implements SmppProvider {
     this.logger.log(
       `计划在 ${reconnectInterval}ms 后尝试第 ${
         this.reconnectAttempts + 1
-      } 次重连`,
+      } 次重连 (当前reconnectAttempts=${this.reconnectAttempts})`,
     );
 
     // 设置重连定时器
@@ -297,11 +300,12 @@ export class DefaultSmppClient extends BaseSmppClient implements SmppProvider {
 
     this.reconnectTimer = setTimeout(async () => {
       this.reconnectAttempts++;
-      this.logger.log(`正在尝试第 ${this.reconnectAttempts} 次重连...`);
+      this.logger.info(`正在尝试第 ${this.reconnectAttempts} 次重连...`);
       try {
         await this.connect();
       } catch (error) {
         this.logger.error(`重连失败: ${error.message}`, error.stack);
+        this.connectionState.isReconnecting = false;
       }
     }, reconnectInterval);
   }
