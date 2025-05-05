@@ -83,6 +83,10 @@ export class DefaultSmppClient extends BaseSmppClient implements SmppProvider {
   private readonly INITIAL_RECONNECT_INTERVAL = 5000; // 初始重连间隔5秒
   private readonly MAX_RECONNECT_INTERVAL = 60000; // 最大重连间隔60秒
 
+  // 添加一个缓存来记录最近处理过的PDU，避免重复处理
+  private recentPduCache: Map<string, number> = new Map();
+  private readonly PDU_CACHE_EXPIRY = 60000; // 1分钟内的重复PDU将被忽略
+
   constructor(
     @InjectRepository(StatusReport)
     private readonly statusReportRepository: Repository<StatusReport>,
@@ -590,16 +594,54 @@ export class DefaultSmppClient extends BaseSmppClient implements SmppProvider {
 
   private async handleDeliverSm(pdu: SmppPDU): Promise<void> {
     this.logger.warn(`[调试] 收到 deliver_sm PDU: ${JSON.stringify(pdu)}`);
+
     // 处理状态报告
     if (pdu.esm_class === 0x04) {
-      await this.handleDeliveryReport(pdu);
+      // 生成一个哈希值作为PDU的唯一标识
+      const pduContent = pdu.short_message?.message || '';
+      const pduHash = `${pduContent}-${pdu.sequence_number}`;
+
+      // 检查是否为最近处理过的相同PDU
+      const lastSeen = this.recentPduCache.get(pduHash);
+      const now = Date.now();
+
+      if (lastSeen && now - lastSeen < this.PDU_CACHE_EXPIRY) {
+        this.logger.warn(
+          `忽略重复的 deliver_sm PDU: ${pduHash}，上次处理时间: ${new Date(
+            lastSeen,
+          ).toISOString()}`,
+        );
+      } else {
+        // 记录该PDU
+        this.recentPduCache.set(pduHash, now);
+
+        // 清理过期的缓存条目
+        this.cleanupPduCache();
+
+        // 处理状态报告
+        await this.handleDeliveryReport(pdu);
+      }
     }
 
-    // 回复SMPP服务器
+    // 不管是否处理，都要回复SMPP服务器
     this.session.deliver_sm_resp({
       command_status: 0,
       sequence_number: pdu.sequence_number,
     });
+  }
+
+  /**
+   * 清理过期的PDU缓存
+   */
+  private cleanupPduCache(): void {
+    const now = Date.now();
+    const expiredTime = now - this.PDU_CACHE_EXPIRY;
+
+    for (const [hash, timestamp] of this.recentPduCache.entries()) {
+      if (timestamp < expiredTime) {
+        this.recentPduCache.delete(hash);
+      }
+    }
   }
 
   private async handleDeliveryReport(pdu: SmppPDU): Promise<void> {
@@ -616,6 +658,31 @@ export class DefaultSmppClient extends BaseSmppClient implements SmppProvider {
       // 2. 转换状态
       const status = this.convertStatusToProviderStatus(stat);
       const errorCode = err || '000';
+
+      // 记录错误码解释
+      let errorCodeDescription = '未知错误';
+      switch (errorCode) {
+        case '000':
+          errorCodeDescription = '无错误';
+          break;
+        case '001':
+          errorCodeDescription = '未知订阅者';
+          break;
+        case '020':
+          errorCodeDescription = '格式错误或无效号码格式 (可能缺少区号)';
+          break;
+        case '046':
+          errorCodeDescription = '数据丢失或数据验证失败';
+          break;
+        default:
+          errorCodeDescription = `未知错误码: ${errorCode}`;
+      }
+
+      if (errorCode !== '000') {
+        this.logger.warn(
+          `SMPP错误码: ${errorCode} - ${errorCodeDescription}, 状态: ${stat}`,
+        );
+      }
 
       // 3. 查找消息记录（带重试机制）
       let message = await this.findMessageByProviderId(messageId);
@@ -649,7 +716,7 @@ export class DefaultSmppClient extends BaseSmppClient implements SmppProvider {
       });
 
       this.logger.log(
-        `[状态报告] messageId=${messageId}, stat=${stat}, status=${status}, err=${errorCode}, deliveredAt=${new Date().toISOString()}`,
+        `[状态报告] messageId=${messageId}, stat=${stat}, status=${status}, err=${errorCode}(${errorCodeDescription}), deliveredAt=${new Date().toISOString()}`,
       );
     } catch (error) {
       this.logger.error(`处理状态报告失败: ${error.message}`, error.stack);
@@ -692,30 +759,40 @@ export class DefaultSmppClient extends BaseSmppClient implements SmppProvider {
     },
   ): Promise<void> {
     try {
-      // 查找是否已存在相同记录
+      // 查找是否已存在相同记录，只通过messageId和providerMessageId查询，不包括status
       const existingReport = await this.statusReportRepository.findOne({
         where: {
           messageId: message.messageId,
           providerMessageId: report.providerMessageId,
-          status: report.status,
         },
       });
 
       if (existingReport) {
-        // 更新已有记录
-        await this.statusReportRepository.update(
-          { id: existingReport.id },
-          {
-            errorCode: report.errorCode,
-            errorMessage: `SMPP状态: ${report.stat}`,
-            deliveredAt: report.deliveredAt,
-            receivedAt: new Date(),
-            rawData: JSON.stringify(report),
-          },
+        // 检查状态优先级，决定是否更新
+        const shouldUpdate = this.shouldUpdateStatus(
+          existingReport.status,
+          report.status,
         );
-        this.logger.log(
-          `更新现有状态报告: messageId=${message.messageId}, providerMessageId=${report.providerMessageId}`,
-        );
+        if (shouldUpdate) {
+          await this.statusReportRepository.update(
+            { id: existingReport.id },
+            {
+              status: report.status,
+              errorCode: report.errorCode,
+              errorMessage: `SMPP状态: ${report.stat}`,
+              deliveredAt: report.deliveredAt,
+              receivedAt: new Date(),
+              rawData: JSON.stringify(report),
+            },
+          );
+          this.logger.log(
+            `更新现有状态报告: messageId=${message.messageId}, providerMessageId=${report.providerMessageId}, 状态从${existingReport.status}更新为${report.status}`,
+          );
+        } else {
+          this.logger.log(
+            `保留现有状态报告(优先级更高): messageId=${message.messageId}, providerMessageId=${report.providerMessageId}, 当前状态=${existingReport.status}, 收到状态=${report.status}`,
+          );
+        }
       } else {
         // 插入新记录
         await this.statusReportRepository.save({
@@ -737,6 +814,27 @@ export class DefaultSmppClient extends BaseSmppClient implements SmppProvider {
     } catch (error) {
       this.logger.error(`记录状态报告失败: ${error.message}`);
     }
+  }
+
+  /**
+   * 判断是否应该更新状态
+   * @param currentStatus 当前状态
+   * @param newStatus 新状态
+   * @returns 如果新状态优先级高于当前状态，返回true
+   */
+  private shouldUpdateStatus(
+    currentStatus: ProviderStatus,
+    newStatus: ProviderStatus,
+  ): boolean {
+    const priorityMap = {
+      FAILED: 1, // 最高优先级
+      DELIVERED: 2,
+      EXPIRED: 3,
+      PENDING: 4, // 最低优先级
+    };
+
+    // 新状态优先级值更小(优先级更高)，则应该更新
+    return priorityMap[newStatus] < priorityMap[currentStatus];
   }
 
   protected async updateMessageStatus(
@@ -763,15 +861,28 @@ export class DefaultSmppClient extends BaseSmppClient implements SmppProvider {
         status.status,
       );
       const oldStatus = message.status;
-      // Update message status
-      await this.messageRepository.update({ messageId }, {
-        status: messageStatus,
-        updateTime: status.deliveredAt,
-        errorMessage: status.stat ? status.stat : undefined,
-      } as Partial<Message>);
-      this.logger.log(
-        `[状态变更] messageId=${messageId}, phone=${message.phoneNumber}, from=${oldStatus}, to=${messageStatus}`,
+
+      // 检查状态优先级，决定是否更新
+      const shouldUpdate = this.shouldUpdateMessageStatus(
+        oldStatus,
+        messageStatus,
       );
+
+      if (shouldUpdate) {
+        // Update message status
+        await this.messageRepository.update({ messageId }, {
+          status: messageStatus,
+          updateTime: status.deliveredAt,
+          errorMessage: status.stat ? status.stat : undefined,
+        } as Partial<Message>);
+        this.logger.log(
+          `[状态变更] messageId=${messageId}, phone=${message.phoneNumber}, from=${oldStatus}, to=${messageStatus}`,
+        );
+      } else {
+        this.logger.log(
+          `[状态保持] messageId=${messageId}, phone=${message.phoneNumber}, 当前状态=${oldStatus}(优先级高于${messageStatus})`,
+        );
+      }
     } catch (error) {
       this.logger.error(
         `Failed to update message status: ${error.message}`,
@@ -779,6 +890,31 @@ export class DefaultSmppClient extends BaseSmppClient implements SmppProvider {
       );
       throw error;
     }
+  }
+
+  /**
+   * 判断是否应该更新消息状态
+   * @param currentStatus 当前状态
+   * @param newStatus 新状态
+   * @returns 如果新状态优先级高于当前状态，返回true
+   */
+  private shouldUpdateMessageStatus(
+    currentStatus: MessageStatus,
+    newStatus: MessageStatus,
+  ): boolean {
+    const priorityMap = {
+      FAILED: 1, // 最高优先级
+      ERROR: 1, // 与FAILED同优先级
+      DELIVERED: 2,
+      EXPIRED: 3,
+      SENDING: 4,
+      PROCESSING: 5,
+      QUEUED: 6,
+      PENDING: 7, // 最低优先级
+    };
+
+    // 新状态优先级更高(数值更小)，则应该更新
+    return priorityMap[newStatus] < priorityMap[currentStatus];
   }
 
   protected mapProviderStatusToMessageStatus(
