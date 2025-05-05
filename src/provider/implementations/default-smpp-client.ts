@@ -198,6 +198,7 @@ export class DefaultSmppClient extends BaseSmppClient implements SmppProvider {
 
             // 处理enquire_link响应
             this.session.on('enquire_link_resp', () => {
+              this.logger.debug('收到 enquire_link 响应');
               this.lastEnquireLinkResponse = Date.now();
             });
 
@@ -329,12 +330,18 @@ export class DefaultSmppClient extends BaseSmppClient implements SmppProvider {
           void this.handleConnectionError(new Error('Enquire link timeout'));
           return;
         }
-
+        this.logger.debug('发送 enquire_link 心跳包');
         void this.session.enquire_link().catch((error) => {
           this.logger.error(`Enquire link失败: ${error.message}`);
         });
       }
     }, enquireLinkInterval);
+
+    // 增加心跳响应日志
+    this.session.on('enquire_link_resp', () => {
+      this.logger.debug('收到 enquire_link 响应');
+      this.lastEnquireLinkResponse = Date.now();
+    });
 
     // 设置消息状态监控定时器
     this.statusMonitorTimer = setInterval(() => {
@@ -904,11 +911,8 @@ export class DefaultSmppClient extends BaseSmppClient implements SmppProvider {
    * 获取重连间隔时间（使用指数退避策略）
    */
   private getReconnectInterval(): number {
-    // 使用指数退避策略，但限制最大间隔
-    return Math.min(
-      this.INITIAL_RECONNECT_INTERVAL * Math.pow(2, this.reconnectAttempts),
-      this.MAX_RECONNECT_INTERVAL,
-    );
+    // 固定重连间隔1秒
+    return 1000;
   }
 
   getProviderId(): string {
