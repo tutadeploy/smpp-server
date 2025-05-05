@@ -341,9 +341,17 @@ export class DefaultSmppClient extends BaseSmppClient implements SmppProvider {
           return;
         }
         this.logger.log('发送 enquire_link 心跳包');
-        void this.session.enquire_link().catch((error) => {
+        try {
+          this.session.enquire_link((pdu) => {
+            if (pdu.command_status !== 0) {
+              this.logger.error(
+                `Enquire link失败: 状态码 ${pdu.command_status}`,
+              );
+            }
+          });
+        } catch (error) {
           this.logger.error(`Enquire link失败: ${error.message}`);
-        });
+        }
       }
     }, enquireLinkInterval);
 
