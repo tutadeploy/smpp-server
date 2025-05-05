@@ -316,10 +316,15 @@ export class DefaultSmppClient extends BaseSmppClient implements SmppProvider {
     // 清理旧的定时器
     if (this.enquireLinkTimer) {
       clearInterval(this.enquireLinkTimer);
+      this.enquireLinkTimer = null;
     }
     if (this.statusMonitorTimer) {
       clearInterval(this.statusMonitorTimer);
+      this.statusMonitorTimer = null;
     }
+
+    // 移除可能存在的旧事件监听器（在重新绑定前）
+    this.session.removeAllListeners('enquire_link_resp');
 
     // 设置enquire_link_resp响应监听器
     this.session.on('enquire_link_resp', () => {
@@ -329,8 +334,10 @@ export class DefaultSmppClient extends BaseSmppClient implements SmppProvider {
 
     // 设置新的 enquire_link 定时器
     const enquireLinkInterval = 10000; // 临时改为10秒，便于测试
+    this.logger.log(`正在启动心跳定时器，间隔: ${enquireLinkInterval}ms`);
+
     this.enquireLinkTimer = setInterval(() => {
-      if (this._isConnected) {
+      if (this._isConnected && this.session) {
         // 检查上次enquire_link响应时间
         const now = Date.now();
         if (now - this.lastEnquireLinkResponse > this.ENQUIRE_LINK_TIMEOUT) {
@@ -340,18 +347,22 @@ export class DefaultSmppClient extends BaseSmppClient implements SmppProvider {
           void this.handleConnectionError(new Error('Enquire link timeout'));
           return;
         }
+
         this.logger.log('发送 enquire_link 心跳包');
         try {
+          // 正确使用SMPP库的enquire_link方法，使用回调而非Promise
           this.session.enquire_link((pdu) => {
-            if (pdu.command_status !== 0) {
+            if (pdu && pdu.command_status !== 0) {
               this.logger.error(
-                `Enquire link失败: 状态码 ${pdu.command_status}`,
+                `Enquire link响应错误: 状态码 ${pdu.command_status}`,
               );
             }
           });
         } catch (error) {
-          this.logger.error(`Enquire link失败: ${error.message}`);
+          this.logger.error(`Enquire link发送异常: ${error.message}`);
         }
+      } else {
+        this.logger.warn('跳过心跳发送: 连接未建立或会话无效');
       }
     }, enquireLinkInterval);
 
