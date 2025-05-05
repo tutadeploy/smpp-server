@@ -13,11 +13,14 @@ export class SendSmsDto {
   @IsString()
   appId: string;
 
-  @ApiProperty({ description: '短信接收号码，多个号码以英文逗号分隔' })
+  @ApiProperty({
+    description: '短信接收号码，多个号码以英文逗号分隔，支持国际格式(带+号)',
+  })
   @IsNotEmpty()
   @IsString()
-  @Matches(/^[0-9,]+$/, {
-    message: '手机号码格式不正确，应为以逗号分隔的数字字符串',
+  @Matches(/^[+0-9,]+$/, {
+    message:
+      '手机号码格式不正确，应为以逗号分隔的数字字符串，可带国际区号前缀(+)',
   })
   numbers: string;
 
