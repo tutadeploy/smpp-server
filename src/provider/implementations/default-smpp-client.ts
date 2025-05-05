@@ -32,6 +32,7 @@ interface SmppPDU {
   final_date?: string;
   destination_addr?: string;
   esm_class?: number;
+  short_message?: any;
 }
 
 @Injectable()
@@ -467,13 +468,19 @@ export class DefaultSmppClient extends BaseSmppClient implements SmppProvider {
 
   protected convertStatusToProviderStatus(status: string): ProviderStatus {
     switch (status.toUpperCase()) {
-      case 'DELIVERED':
+      case 'DELIVRD':
         return ProviderStatusEnum.DELIVERED;
+      case 'UNDELIV':
+      case 'REJECTD':
       case 'FAILED':
       case 'ERROR':
         return ProviderStatusEnum.FAILED;
       case 'EXPIRED':
         return ProviderStatusEnum.EXPIRED;
+      case 'ACCEPTD':
+      case 'ENROUTE':
+      case 'UNKNOWN':
+        return ProviderStatusEnum.PENDING;
       default:
         return ProviderStatusEnum.PENDING;
     }
@@ -583,18 +590,45 @@ export class DefaultSmppClient extends BaseSmppClient implements SmppProvider {
   private async handleDeliveryReport(pdu: SmppPDU): Promise<void> {
     this.logger.warn(`[调试] 收到状态报告 PDU: ${JSON.stringify(pdu)}`);
     try {
-      const messageId = pdu.message_id || '';
-      const status = this.convertMessageState(pdu.message_state || 0);
+      // 解析 message_id 和 stat 字段
+      let messageId = '';
+      let stat = '';
+      let errorCode = '';
+      if (pdu.short_message && pdu.short_message.message) {
+        const msg = pdu.short_message.message;
+        // 提取 id:xxxxxxx
+        const idMatch = msg.match(/id:([0-9A-Za-z]+)/);
+        if (idMatch) messageId = idMatch[1];
+        // 提取 stat:XXXXXX
+        const statMatch = msg.match(/stat:([A-Z]+)/);
+        if (statMatch) stat = statMatch[1];
+        // 提取 err:XXX
+        const errMatch = msg.match(/err:([0-9]+)/);
+        if (errMatch) errorCode = errMatch[1];
+      }
+      if (!messageId) {
+        this.logger.error(
+          `[状态报告解析失败] 未找到message_id, PDU: ${JSON.stringify(pdu)}`,
+        );
+        return;
+      }
+      const status = this.convertStatusToProviderStatus(stat);
       const deliveredAt = pdu.final_date
         ? new Date(pdu.final_date)
         : new Date();
       this.logger.log(
-        `[状态报告] messageId=${messageId}, status=${status}, deliveredAt=${deliveredAt.toISOString()}`,
+        `[状态报告] messageId=${messageId}, stat=${stat}, status=${status}, err=${errorCode}, deliveredAt=${deliveredAt.toISOString()}`,
       );
-      // 更新消息状态
+      // 更新消息状态和写入状态报告
       await this.updateMessageStatus(messageId, {
         status,
         deliveredAt,
+        errorCode,
+        stat,
+        rawData:
+          pdu.short_message && pdu.short_message.message
+            ? pdu.short_message.message
+            : '',
       });
     } catch (error) {
       const smppError = error as Error;
@@ -607,7 +641,13 @@ export class DefaultSmppClient extends BaseSmppClient implements SmppProvider {
 
   protected async updateMessageStatus(
     messageId: string,
-    status: { status: ProviderStatus; deliveredAt: Date },
+    status: {
+      status: ProviderStatus;
+      deliveredAt: Date;
+      errorCode?: string;
+      stat?: string;
+      rawData?: string;
+    },
   ): Promise<void> {
     try {
       const message = await this.messageRepository.findOne({
@@ -627,6 +667,7 @@ export class DefaultSmppClient extends BaseSmppClient implements SmppProvider {
       await this.messageRepository.update({ messageId }, {
         status: messageStatus,
         updateTime: status.deliveredAt,
+        errorMessage: status.stat ? status.stat : undefined,
       } as Partial<Message>);
       this.logger.log(
         `[状态变更] messageId=${messageId}, phone=${message.phoneNumber}, from=${oldStatus}, to=${messageStatus}`,
@@ -640,7 +681,9 @@ export class DefaultSmppClient extends BaseSmppClient implements SmppProvider {
       statusReport.status = status.status;
       statusReport.deliveredAt = status.deliveredAt;
       statusReport.receivedAt = new Date();
-
+      statusReport.errorCode = status.errorCode;
+      statusReport.errorMessage = status.stat;
+      statusReport.rawData = status.rawData;
       await this.statusReportRepository.save(statusReport);
     } catch (error) {
       this.logger.error(
