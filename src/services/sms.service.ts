@@ -84,6 +84,11 @@ export class SmsService implements ISmsService {
         senderId: data.senderId,
         priority: 1,
       });
+      messages.forEach((msg) => {
+        this.logger.log(
+          `[入库] messageId=${msg.messageId}, phone=${msg.phoneNumber}, status=${msg.status}`,
+        );
+      });
 
       // 4. 在发送短信前扣除余额
       const totalAmount = phoneNumbers.length * this.pricePerSms;
@@ -101,6 +106,9 @@ export class SmsService implements ISmsService {
           timestamp: new Date().toISOString(),
           providerId: 'default',
         };
+        this.logger.log(
+          `[入队] messageId=${queueMessage.messageId}, phone=${queueMessage.phoneNumber}`,
+        );
         await this.queueService.enqueueMessage(queueMessage);
       }
 
@@ -206,8 +214,12 @@ export class SmsService implements ISmsService {
       });
 
       if (message) {
+        const oldStatus = message.status;
         message.status = status;
         await this.messageRepository.save(message);
+        this.logger.log(
+          `[状态变更] messageId=${message.messageId}, phone=${message.phoneNumber}, from=${oldStatus}, to=${status}`,
+        );
       }
     } catch (error) {
       this.logger.error(`更新消息状态失败: ${error.message}`, error.stack);

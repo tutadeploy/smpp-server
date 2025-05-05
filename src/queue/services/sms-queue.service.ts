@@ -54,10 +54,16 @@ export class SmsQueueService implements ISmsQueueService {
       // 更新消息状态为处理中
       msgEntity.status = MessageStatusEnum.PROCESSING;
       await this.messageRepository.save(msgEntity);
+      this.logger.log(
+        `[队列消费] messageId=${msgEntity.messageId}, phone=${msgEntity.phoneNumber}, status=PROCESSING`,
+      );
 
       // 通过Provider发送短信
       msgEntity.status = MessageStatusEnum.SENDING;
       await this.messageRepository.save(msgEntity);
+      this.logger.log(
+        `[队列消费] messageId=${msgEntity.messageId}, phone=${msgEntity.phoneNumber}, status=SENDING`,
+      );
 
       const result = await this.providerService.sendMessage({
         messageId: message.messageId,
@@ -75,6 +81,9 @@ export class SmsQueueService implements ISmsQueueService {
         msgEntity.providerMessageId = result.messageId;
         msgEntity.sendTime = new Date();
         await this.messageRepository.save(msgEntity);
+        this.logger.log(
+          `[发送成功] messageId=${msgEntity.messageId}, phone=${msgEntity.phoneNumber}, smppMessageId=${result.messageId}, status=DELIVERED`,
+        );
         this.metricsService.incrementCounter('message_sent_success');
         return true;
       } else {
@@ -84,6 +93,9 @@ export class SmsQueueService implements ISmsQueueService {
           msgEntity.status = MessageStatusEnum.QUEUED;
           msgEntity.errorMessage = result.error || 'Unknown error';
           await this.messageRepository.save(msgEntity);
+          this.logger.warn(
+            `[发送失败-重试] messageId=${msgEntity.messageId}, phone=${msgEntity.phoneNumber}, status=QUEUED, retryCount=${msgEntity.retryCount}, error=${result.error}`,
+          );
 
           // 将消息重新入队
           setTimeout(async () => {
@@ -97,6 +109,9 @@ export class SmsQueueService implements ISmsQueueService {
           msgEntity.status = MessageStatusEnum.FAILED;
           msgEntity.errorMessage = result.error || 'Max retries exceeded';
           await this.messageRepository.save(msgEntity);
+          this.logger.error(
+            `[发送失败-终止] messageId=${msgEntity.messageId}, phone=${msgEntity.phoneNumber}, status=FAILED, error=${result.error}`,
+          );
           this.metricsService.incrementCounter('message_failed');
           return false;
         }

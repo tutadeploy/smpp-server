@@ -381,7 +381,9 @@ export class DefaultSmppClient extends BaseSmppClient implements SmppProvider {
               ? this.formatSmppTime(params.scheduleTime)
               : undefined,
           });
-
+          this.logger.log(
+            `[SMPP响应] 提交resp: phone=${phoneNumber}, smppMessageId=${result.message_id}, status=${result.command_status}`,
+          );
           const messageResult: MessageResult = {
             messageId: result.message_id || '',
             phoneNumber,
@@ -402,6 +404,9 @@ export class DefaultSmppClient extends BaseSmppClient implements SmppProvider {
             status: 'failed',
             errorMessage: smppError.message,
           };
+          this.logger.error(
+            `[SMPP响应] 提交resp失败: phone=${phoneNumber}, error=${smppError.message}`,
+          );
           return messageResult;
         }
       }),
@@ -581,7 +586,9 @@ export class DefaultSmppClient extends BaseSmppClient implements SmppProvider {
       const deliveredAt = pdu.final_date
         ? new Date(pdu.final_date)
         : new Date();
-
+      this.logger.log(
+        `[状态报告] messageId=${messageId}, status=${status}, deliveredAt=${deliveredAt.toISOString()}`,
+      );
       // 更新消息状态
       await this.updateMessageStatus(messageId, {
         status,
@@ -613,13 +620,15 @@ export class DefaultSmppClient extends BaseSmppClient implements SmppProvider {
       const messageStatus = this.mapProviderStatusToMessageStatus(
         status.status,
       );
-
+      const oldStatus = message.status;
       // Update message status
       await this.messageRepository.update({ messageId }, {
         status: messageStatus,
         updateTime: status.deliveredAt,
       } as Partial<Message>);
-
+      this.logger.log(
+        `[状态变更] messageId=${messageId}, phone=${message.phoneNumber}, from=${oldStatus}, to=${messageStatus}`,
+      );
       // Save status report
       const statusReport = new StatusReport();
       statusReport.messageId = messageId;
