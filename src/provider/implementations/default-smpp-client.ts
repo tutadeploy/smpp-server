@@ -333,7 +333,7 @@ export class DefaultSmppClient extends BaseSmppClient implements SmppProvider {
     });
 
     // 设置新的 enquire_link 定时器
-    const enquireLinkInterval = 50000; // 50秒
+    const enquireLinkInterval = 20000; // 50秒
     this.logger.log(`正在启动心跳定时器，间隔: ${enquireLinkInterval}ms`);
 
     this.enquireLinkTimer = setInterval(() => {
