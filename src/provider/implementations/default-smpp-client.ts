@@ -321,8 +321,14 @@ export class DefaultSmppClient extends BaseSmppClient implements SmppProvider {
       clearInterval(this.statusMonitorTimer);
     }
 
+    // 设置enquire_link_resp响应监听器
+    this.session.on('enquire_link_resp', () => {
+      this.logger.log('收到 enquire_link 响应');
+      this.lastEnquireLinkResponse = Date.now();
+    });
+
     // 设置新的 enquire_link 定时器
-    const enquireLinkInterval = 60000; // 60秒
+    const enquireLinkInterval = 10000; // 临时改为10秒，便于测试
     this.enquireLinkTimer = setInterval(() => {
       if (this._isConnected) {
         // 检查上次enquire_link响应时间
@@ -334,18 +340,14 @@ export class DefaultSmppClient extends BaseSmppClient implements SmppProvider {
           void this.handleConnectionError(new Error('Enquire link timeout'));
           return;
         }
-        this.logger.debug('发送 enquire_link 心跳包');
+        this.logger.log('发送 enquire_link 心跳包');
         void this.session.enquire_link().catch((error) => {
           this.logger.error(`Enquire link失败: ${error.message}`);
         });
       }
     }, enquireLinkInterval);
 
-    // 增加心跳响应日志
-    this.session.on('enquire_link_resp', () => {
-      this.logger.debug('收到 enquire_link 响应');
-      this.lastEnquireLinkResponse = Date.now();
-    });
+    this.logger.log(`心跳定时器已启动，间隔：${enquireLinkInterval}ms`);
 
     // 设置消息状态监控定时器
     this.statusMonitorTimer = setInterval(() => {
