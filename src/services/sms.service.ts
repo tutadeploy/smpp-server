@@ -290,7 +290,10 @@ export class SmsService implements ISmsService {
   }
 
   private isValidPhoneNumber(phone: string): boolean {
-    return /^\d{8,}$/.test(phone);
+    // 支持以下格式:
+    // 1. 纯数字格式，至少8位数字 (如 12345678)
+    // 2. 带加号的国际格式 (如 +8612345678)
+    return /^(\+?\d{8,})$/.test(phone);
   }
 
   private handleSendError(error: Error, phoneCount: number): SmsResponseDto {

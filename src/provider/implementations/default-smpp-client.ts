@@ -548,11 +548,38 @@ export class DefaultSmppClient extends BaseSmppClient implements SmppProvider {
         ...params,
         source_addr_ton: 0,
         source_addr_npi: 0,
-        dest_addr_ton: 1,
+        dest_addr_ton: 1, // 默认为国际格式
         dest_addr_npi: 1,
         data_coding: 0,
         registered_delivery: 1,
       };
+
+      // 处理电话号码格式
+      if (typeof smppParams.destination_addr === 'string') {
+        const phoneNumber = smppParams.destination_addr;
+
+        // 检查号码是否带有加号前缀
+        if (phoneNumber.startsWith('+')) {
+          // 号码带加号，设置为国际格式(TON=1)并保留加号
+          smppParams.dest_addr_ton = 1; // 国际格式
+          // 保留原始带加号的格式
+          this.logger.debug(`使用国际格式号码(带加号): ${phoneNumber}`);
+        } else if (/^\d{8,15}$/.test(phoneNumber)) {
+          // 纯数字号码，检查长度判断是否为国际格式
+          if (phoneNumber.length > 10) {
+            // 可能是国际格式，但不带加号
+            smppParams.dest_addr_ton = 1; // 国际格式
+            this.logger.debug(`使用国际格式号码(不带加号): ${phoneNumber}`);
+          } else {
+            // 可能是本地号码
+            smppParams.dest_addr_ton = 0; // 未知格式
+            this.logger.debug(`使用本地格式号码: ${phoneNumber}`);
+          }
+        } else {
+          // 其他格式，使用默认设置
+          this.logger.debug(`使用默认格式号码: ${phoneNumber}`);
+        }
+      }
 
       // 删除所有 undefined 字段
       Object.keys(smppParams).forEach(
