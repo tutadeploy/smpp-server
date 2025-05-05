@@ -692,18 +692,48 @@ export class DefaultSmppClient extends BaseSmppClient implements SmppProvider {
     },
   ): Promise<void> {
     try {
-      await this.statusReportRepository.save({
-        messageId: message.messageId,
-        phoneNumber: message.phoneNumber,
-        providerId: this.name,
-        providerMessageId: report.providerMessageId,
-        status: report.status,
-        errorCode: report.errorCode,
-        errorMessage: `SMPP状态: ${report.stat}`,
-        deliveredAt: report.deliveredAt,
-        receivedAt: new Date(),
-        rawData: JSON.stringify(report),
+      // 查找是否已存在相同记录
+      const existingReport = await this.statusReportRepository.findOne({
+        where: {
+          messageId: message.messageId,
+          providerMessageId: report.providerMessageId,
+          status: report.status,
+        },
       });
+
+      if (existingReport) {
+        // 更新已有记录
+        await this.statusReportRepository.update(
+          { id: existingReport.id },
+          {
+            errorCode: report.errorCode,
+            errorMessage: `SMPP状态: ${report.stat}`,
+            deliveredAt: report.deliveredAt,
+            receivedAt: new Date(),
+            rawData: JSON.stringify(report),
+          },
+        );
+        this.logger.log(
+          `更新现有状态报告: messageId=${message.messageId}, providerMessageId=${report.providerMessageId}`,
+        );
+      } else {
+        // 插入新记录
+        await this.statusReportRepository.save({
+          messageId: message.messageId,
+          phoneNumber: message.phoneNumber,
+          providerId: this.name,
+          providerMessageId: report.providerMessageId,
+          status: report.status,
+          errorCode: report.errorCode,
+          errorMessage: `SMPP状态: ${report.stat}`,
+          deliveredAt: report.deliveredAt,
+          receivedAt: new Date(),
+          rawData: JSON.stringify(report),
+        });
+        this.logger.log(
+          `新增状态报告: messageId=${message.messageId}, providerMessageId=${report.providerMessageId}`,
+        );
+      }
     } catch (error) {
       this.logger.error(`记录状态报告失败: ${error.message}`);
     }
@@ -742,19 +772,6 @@ export class DefaultSmppClient extends BaseSmppClient implements SmppProvider {
       this.logger.log(
         `[状态变更] messageId=${messageId}, phone=${message.phoneNumber}, from=${oldStatus}, to=${messageStatus}`,
       );
-      // Save status report
-      const statusReport = new StatusReport();
-      statusReport.messageId = messageId;
-      statusReport.phoneNumber = message.phoneNumber;
-      statusReport.providerId = this.name;
-      statusReport.providerMessageId = message.providerMessageId || messageId;
-      statusReport.status = status.status;
-      statusReport.deliveredAt = status.deliveredAt;
-      statusReport.receivedAt = new Date();
-      statusReport.errorCode = status.errorCode;
-      statusReport.errorMessage = status.stat;
-      statusReport.rawData = status.rawData;
-      await this.statusReportRepository.save(statusReport);
     } catch (error) {
       this.logger.error(
         `Failed to update message status: ${error.message}`,

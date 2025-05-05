@@ -44,7 +44,7 @@ module.exports = {
     {
       name: 'smpp-prod',
       script: 'dist/main.js',
-      instances: 2,
+      instances: 1,
       exec_mode: 'cluster',
       max_memory_restart: '1G',
       env_file: '.env.prod',

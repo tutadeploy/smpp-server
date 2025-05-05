@@ -113,7 +113,8 @@ CREATE TABLE IF NOT EXISTS status_reports (
     delivered_at TIMESTAMP WITH TIME ZONE,
     received_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     raw_data TEXT,
-    FOREIGN KEY (message_id) REFERENCES messages(message_id)
+    FOREIGN KEY (message_id) REFERENCES messages(message_id),
+    CONSTRAINT unique_message_provider_status UNIQUE (message_id, provider_message_id, status)
 );
 
 CREATE INDEX IF NOT EXISTS idx_status_reports_message_id ON status_reports(message_id);
