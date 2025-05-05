@@ -300,7 +300,7 @@ export class DefaultSmppClient extends BaseSmppClient implements SmppProvider {
 
     this.reconnectTimer = setTimeout(async () => {
       this.reconnectAttempts++;
-      this.logger.info(`正在尝试第 ${this.reconnectAttempts} 次重连...`);
+      this.logger.log(`正在尝试第 ${this.reconnectAttempts} 次重连...`);
       try {
         await this.connect();
       } catch (error) {
