@@ -47,8 +47,8 @@ export class DefaultSmppClient extends BaseSmppClient implements SmppProvider {
   private isServerUnbind = false;
   private readonly STATUS_CHECK_INTERVAL = 30000; // 30秒检查一次
   private readonly MAX_STATUS_CHECK_AGE = 24 * 60 * 60 * 1000; // 24小时
-  private readonly ENQUIRE_LINK_TIMEOUT = 30000; // 30秒超时
-  private readonly ENQUIRE_LINK_INTERVAL = 15000; // 15秒发送一次心跳
+  private readonly ENQUIRE_LINK_TIMEOUT = 65000; // 65秒超时
+  private readonly ENQUIRE_LINK_INTERVAL = 60000; // 60秒发送一次心跳
   private lastEnquireLinkResponse: number = Date.now();
   private connectionState: {
     lastError?: Error;
@@ -61,7 +61,7 @@ export class DefaultSmppClient extends BaseSmppClient implements SmppProvider {
   } = {
     consecutiveFailures: 0,
     isReconnecting: false,
-    cooldownPeriod: 30000, // 30秒冷却时间
+    cooldownPeriod: 0, // 取消冷却期，断开后立即重连
   };
   private sessionId: string;
   private state: string;
@@ -270,24 +270,7 @@ export class DefaultSmppClient extends BaseSmppClient implements SmppProvider {
     this.connectionState.lastErrorTime = new Date();
     this.connectionState.consecutiveFailures++;
 
-    // 检查是否需要进入冷却期
-    if (this.connectionState.lastUnbindTime) {
-      const timeSinceLastUnbind =
-        Date.now() - this.connectionState.lastUnbindTime.getTime();
-      if (timeSinceLastUnbind < this.connectionState.cooldownPeriod) {
-        this.logger.warn(
-          `处于冷却期，等待 ${
-            this.connectionState.cooldownPeriod - timeSinceLastUnbind
-          }ms 后重试`,
-        );
-        await new Promise((resolve) =>
-          setTimeout(
-            resolve,
-            this.connectionState.cooldownPeriod - timeSinceLastUnbind,
-          ),
-        );
-      }
-    }
+    // 取消冷却期逻辑，直接重连
 
     // 检查是否超过最大重连次数
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
@@ -334,7 +317,7 @@ export class DefaultSmppClient extends BaseSmppClient implements SmppProvider {
     }
 
     // 设置新的 enquire_link 定时器
-    const enquireLinkInterval = this.config.enquireLinkTimer || 30000;
+    const enquireLinkInterval = 60000; // 60秒
     this.enquireLinkTimer = setInterval(() => {
       if (this._isConnected) {
         // 检查上次enquire_link响应时间
