@@ -102,17 +102,17 @@ CREATE INDEX IF NOT EXISTS idx_messages_phoneNumber ON messages("phoneNumber");
 
 -- 创建状态报告表
 CREATE TABLE IF NOT EXISTS status_reports (
-    id BIGSERIAL PRIMARY KEY, -- 状态报告ID
-    message_id VARCHAR(36) NOT NULL, -- 关联的消息ID
-    phone_number VARCHAR(32) NOT NULL, -- 手机号码
-    provider_id VARCHAR(32) NOT NULL, -- 提供商ID
-    provider_message_id VARCHAR(64) NOT NULL, -- 提供商生成的消息ID
-    status VARCHAR(20) NOT NULL DEFAULT 'PENDING', -- 状态：PENDING-待处理，DELIVERED-已送达，FAILED-失败，EXPIRED-过期
-    error_code VARCHAR(20), -- 错误代码
-    error_message TEXT, -- 错误信息
-    delivered_at TIMESTAMP WITH TIME ZONE, -- 送达时间
-    received_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP, -- 报告接收时间
-    raw_data TEXT, -- 原始状态报告数据
+    id BIGSERIAL PRIMARY KEY,
+    message_id VARCHAR(64) NOT NULL,
+    phone_number VARCHAR(32) NOT NULL,
+    provider_id VARCHAR(32) NOT NULL,
+    provider_message_id VARCHAR(64) NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+    error_code VARCHAR(20),
+    error_message TEXT,
+    delivered_at TIMESTAMP WITH TIME ZONE,
+    received_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    raw_data TEXT,
     FOREIGN KEY (message_id) REFERENCES messages(message_id)
 );
 

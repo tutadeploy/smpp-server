@@ -18,7 +18,7 @@ export class StatusReport {
   @PrimaryGeneratedColumn('increment')
   id: number;
 
-  @Column({ name: 'message_id', length: 36 })
+  @Column({ name: 'message_id', length: 64 })
   @Index()
   messageId: string;
 
