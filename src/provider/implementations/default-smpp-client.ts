@@ -567,6 +567,7 @@ export class DefaultSmppClient extends BaseSmppClient implements SmppProvider {
   }
 
   private async handleDeliverSm(pdu: SmppPDU): Promise<void> {
+    this.logger.warn(`[调试] 收到 deliver_sm PDU: ${JSON.stringify(pdu)}`);
     // 处理状态报告
     if (pdu.esm_class === 0x04) {
       await this.handleDeliveryReport(pdu);
@@ -580,6 +581,7 @@ export class DefaultSmppClient extends BaseSmppClient implements SmppProvider {
   }
 
   private async handleDeliveryReport(pdu: SmppPDU): Promise<void> {
+    this.logger.warn(`[调试] 收到状态报告 PDU: ${JSON.stringify(pdu)}`);
     try {
       const messageId = pdu.message_id || '';
       const status = this.convertMessageState(pdu.message_state || 0);
