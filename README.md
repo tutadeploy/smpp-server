@@ -105,19 +105,19 @@ cp .env.example .env
 
 ### 提供商配置
 
-- `ACTIVE_PROVIDER_ID`: 激活的SMPP提供商ID (默认: prod1)
+- `ACTIVE_PROVIDER_ID`: 激活的 SMPP 提供商 ID (默认: prod1)
 
 ## 提供商管理
 
-系统支持多个SMPP提供商配置，通过数据库进行管理。默认情况下，系统预设了三个提供商：
+系统支持多个 SMPP 提供商配置，通过数据库进行管理。默认情况下，系统预设了三个提供商：
 
-1. `prod1`: 本地Mock提供商 (优先级: 10)
-2. `prod2`: 测试服务器Mock (优先级: 20)
+1. `prod1`: 本地 Mock 提供商 (优先级: 10)
+2. `prod2`: 测试服务器 Mock (优先级: 20)
 3. `prod3`: 生产环境提供商 (优先级: 5)
 
 ### 提供商选择
 
-系统会根据以下规则选择SMPP提供商：
+系统会根据以下规则选择 SMPP 提供商：
 
 1. 如果设置了环境变量 `ACTIVE_PROVIDER_ID`，则使用指定的提供商。
 2. 如果未设置，则使用在数据库 `providers` 表中状态为启用且优先级最高的提供商。
@@ -133,7 +133,7 @@ export ACTIVE_PROVIDER_ID=prod3
 npm run start:dev
 ```
 
-2. **运行时切换**：通过API调用切换（需实现API接口）。
+2. **运行时切换**：通过 API 调用切换（需实现 API 接口）。
 
 ### 管理提供商
 
@@ -148,8 +148,8 @@ UPDATE providers SET status = 0 WHERE provider_id = 'prod2';
 
 -- 添加新提供商
 INSERT INTO providers (
-    provider_id, provider_name, host, port, system_id, password, 
-    source_addr, connect_timeout, request_timeout, 
+    provider_id, provider_name, host, port, system_id, password,
+    source_addr, connect_timeout, request_timeout,
     reconnect_interval, max_reconnect_attempts, priority, weight, status
 ) VALUES (
     'new_provider', '新提供商', 'smpp.example.com', 2775, 'username', 'password',
@@ -161,4 +161,40 @@ INSERT INTO providers (
 
 ### 开发环境
 
+## API 认证
+
+本系统支持两种风格的 API 认证请求头:
+
+### 1. 标准格式 (推荐)
+
 ```
+X-API-KEY: your_api_key
+X-TIMESTAMP: 1630468800
+X-SIGNATURE: 05d7a50893e22a5c4bb3216ae3396c7c
+```
+
+### 2. Buka 兼容格式
+
+```
+Api-Key: your_api_key
+Timestamp: 1630468800
+Sign: 05d7a50893e22a5c4bb3216ae3396c7c
+```
+
+### 签名生成规则
+
+使用 `API key + API secret + Timestamp` 生成 MD5-32 位字符串（不区分大小写）作为签名。
+
+#### 示例
+
+- **API key:** `admin`
+- **API secret:** `admin123`
+- **Timestamp:** `1630468800`
+- **生成签名:** `MD5(adminadmin1231630468800) = 1f5e29b5e4c1183e26583887117af20c`
+
+### 安全增强
+
+为提高安全性，本系统添加了以下增强功能:
+
+1. **时间戳验证**: 时间戳与服务器时间的差异不能超过 300 秒(可配置)
+2. **多种签名算法支持**: 除 MD5 外，还支持 HMAC 和 RSA 签名(可扩展)

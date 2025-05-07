@@ -24,11 +24,25 @@ export class SignatureGuard implements CanActivate {
       throw new UnauthorizedException('Service not found');
     }
 
+    // 兼容两种请求头风格
+    // 1. 我们自己的X-TIMESTAMP和X-SIGNATURE格式
+    // 2. Buka的Timestamp和Sign格式
     const timestamp = parseInt(
-      String(request.headers['x-timestamp'] ?? '0'),
+      String(
+        request.headers['x-timestamp'] ||
+          request.headers['timestamp'] ||
+          request.headers['Timestamp'] ||
+          '0',
+      ),
       10,
     );
-    const signature = String(request.headers['x-signature'] ?? '');
+
+    const signature = String(
+      request.headers['x-signature'] ||
+        request.headers['sign'] ||
+        request.headers['Sign'] ||
+        '',
+    );
 
     if (!timestamp || !signature) {
       throw new UnauthorizedException('Missing timestamp or signature');

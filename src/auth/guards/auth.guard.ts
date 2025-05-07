@@ -18,7 +18,16 @@ export class AuthGuard implements CanActivate {
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
-    const apiKey = String(request.headers['x-api-key'] ?? '');
+
+    // 支持两种风格的API Key请求头
+    // 1. 我们自己的X-API-KEY格式
+    // 2. Buka的Api-Key格式
+    const apiKey = String(
+      request.headers['x-api-key'] ||
+        request.headers['api-key'] ||
+        request.headers['Api-Key'] ||
+        '',
+    );
 
     if (!apiKey) {
       throw new UnauthorizedException('Missing API key');

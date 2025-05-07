@@ -51,4 +51,17 @@ export class AuthService {
 
     return true;
   }
+
+  // 添加从请求中获取API Key的辅助方法
+  getApiKeyFromRequest(request: any): string {
+    // 支持两种风格的API Key请求头
+    // 1. 我们自己的X-API-KEY格式
+    // 2. Buka的Api-Key格式
+    return String(
+      request.headers['x-api-key'] ||
+        request.headers['api-key'] ||
+        request.headers['Api-Key'] ||
+        '',
+    );
+  }
 }
