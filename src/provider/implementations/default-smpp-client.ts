@@ -550,7 +550,7 @@ export class DefaultSmppClient extends BaseSmppClient implements SmppProvider {
         source_addr_npi: 0,
         dest_addr_ton: 1, // 默认为国际格式
         dest_addr_npi: 1,
-        data_coding: 0,
+        data_coding: 8, // 直接使用UCS2编码，支持中文字符
         registered_delivery: 1,
       };
 
@@ -589,13 +589,22 @@ export class DefaultSmppClient extends BaseSmppClient implements SmppProvider {
       // 处理 short_message
       if (typeof smppParams.short_message === 'string') {
         try {
-          smppParams.short_message = Buffer.from(
-            smppParams.short_message,
-            'utf8',
-          );
-          this.logger.debug('消息内容已转换为 Buffer:', {
+          const message = smppParams.short_message;
+
+          // 始终使用UCS2编码，将消息转换为UTF-16BE Buffer
+          const buf = Buffer.alloc(message.length * 2);
+          for (let i = 0; i < message.length; i++) {
+            const codePoint = message.charCodeAt(i);
+            // 高字节在前(BE - Big Endian)
+            buf[i * 2] = (codePoint >> 8) & 0xff;
+            buf[i * 2 + 1] = codePoint & 0xff;
+          }
+          smppParams.short_message = buf;
+
+          this.logger.log('消息内容已使用UCS2编码转换为Buffer:', {
             length: smppParams.short_message.length,
-            content: smppParams.short_message.toString('utf8'),
+            content: message,
+            dataCoding: smppParams.data_coding,
           });
         } catch (error) {
           this.logger.error(`消息内容转换失败: ${error.message}`, error.stack);
@@ -604,9 +613,13 @@ export class DefaultSmppClient extends BaseSmppClient implements SmppProvider {
         }
       }
 
-      this.logger.debug('submit_sm 参数:', {
+      this.logger.log('submit_sm 参数:', {
         ...smppParams,
-        short_message: smppParams.short_message?.toString('utf8'),
+        short_message:
+          typeof smppParams.short_message === 'object'
+            ? '[Buffer]'
+            : smppParams.short_message,
+        data_coding: smppParams.data_coding,
       });
 
       this.session.submit_sm(smppParams, (pdu: SmppPDU) => {
