@@ -22,6 +22,8 @@ import * as fs from 'fs';
 import { Logger } from '@nestjs/common';
 import { QUEUE_SERVICE } from '../../queue/constants';
 import { IQueueService } from '../../queue/interfaces/queue.interface';
+import { diskStorage } from 'multer';
+import * as path from 'path';
 
 @ApiTags('短信服务')
 @Controller('api/v1')
@@ -145,7 +147,26 @@ export class MessageController {
 
   @Post('batchSendSms')
   @UseGuards(AuthGuard)
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: diskStorage({
+        destination: (req, file, cb) => {
+          const uploadPath = './uploads';
+          // 确保上传目录存在
+          if (!fs.existsSync(uploadPath)) {
+            fs.mkdirSync(uploadPath, { recursive: true });
+          }
+          cb(null, uploadPath);
+        },
+        filename: (req, file, cb) => {
+          const uniqueSuffix =
+            Date.now() + '-' + Math.round(Math.random() * 1e9);
+          const ext = path.extname(file.originalname);
+          cb(null, `phone-list-${uniqueSuffix}${ext}`);
+        },
+      }),
+    }),
+  )
   @ApiOperation({ summary: '批量发送短信' })
   @ApiResponse({
     status: 200,
