@@ -394,7 +394,7 @@ export class DefaultSmppClient extends BaseSmppClient implements SmppProvider {
       (params.phoneNumbers || [params.phoneNumber]).map(async (phoneNumber) => {
         try {
           const result = await this.submitSm({
-            source_addr: 'Tiktok',
+            source_addr: 'SFExpress',
             destination_addr: phoneNumber,
             short_message: params.content,
             schedule_delivery_time: params.scheduleTime
